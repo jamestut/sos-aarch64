@@ -1,0 +1,1 @@
+projects/aos/init-build.sh

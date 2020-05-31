@@ -1,0 +1,14 @@
+#!/bin/sh
+#
+# Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
+#
+# SPDX-License-Identifier: BSD-2-Clause
+#
+@Ignore_the_below_comment@
+# THIS IS A GENERATED FILE.  ANY EDITS WILL BE DISCARDED UPON A CMAKE RECONFIGURE
+
+SYSROOT=@sysroot@
+
+export PKG_CONFIG_LIBDIR=${SYSROOT}/lib/pkgconfig:${SYSROOT}/share/pkgconfig
+
+exec pkg-config "$@"

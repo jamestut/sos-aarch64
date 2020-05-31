@@ -1,0 +1,1 @@
+projects/aos/reset.sh
