@@ -47,9 +47,11 @@ http_query () {
 
 ws_stream () {
 	path=$1; shift
-	stty -raw -echo
+	stty -icanon -echo
 	websocat \
-		--binary -E \
+		--no-line --binary -E \
+		--ping-interval 5 \
+		--ping-timeout 20 \
 		-H "Authorization: Bearer $(cat "${AUTH_TOKEN_FILE}")" \
 		-- - "${AOS_WS_URL}/${path}"
 	stty cooked echo
