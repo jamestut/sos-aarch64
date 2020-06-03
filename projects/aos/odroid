@@ -51,6 +51,7 @@ ws_stream () {
 		--binary -E \
 		--ping-interval 5 \
 		--ping-timeout 20 \
+		"$@" \
 		-H "Authorization: Bearer $(cat "${AUTH_TOKEN_FILE}")" \
 		-- - "${AOS_WS_URL}/${path}"
 }
@@ -212,8 +213,8 @@ case "${action}" in
 	"reallocate") reallocate;;
 	"reconfigure") reconfigure;;
 	"status") odroid_status;;
-	"tty") tty;;
-	"serial") serial;;
+	"tty") tty "$@";;
+	"serial") serial "$@";;
 	"help") show_help;;
 	"--help") show_help;;
 	"-h") show_help;;
