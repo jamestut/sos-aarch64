@@ -131,12 +131,12 @@ odroid_status () {
 
 # Connect to the hardware UART stream
 tty () {
-	ws_stream tty
+	ws_stream tty "$@"
 }
 
 # Conntect to the UDP "serial" connection
 serial () {
-	ws_stream serial
+	ws_stream serial "$@"
 }
 
 show_help () {
