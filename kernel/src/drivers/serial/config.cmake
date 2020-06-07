@@ -38,3 +38,8 @@ register_driver(
     PREFIX src/drivers/serial
     CFILES "meson-gx-uart.c"
 )
+register_driver(
+    compatibility_strings "qemu-arm-virt,null-uart"
+    PREFIX src/drivers/serial
+    CFILES "null-uart.c"
+)

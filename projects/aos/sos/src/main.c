@@ -549,9 +549,11 @@ NORETURN void *main_continued(UNUSED void *arg)
      * so touching the watchdog timers here is not recommended!) */
     void *timer_vaddr = sos_map_device(&cspace, PAGE_ALIGN_4K(TIMER_MAP_BASE), PAGE_SIZE_4K);
 
-    /* Initialise the network hardware. */
+    /* Initialise the network hardware. (meson ethernet for now) */
+    #ifdef CONFIG_PLAT_ODROIDC2
     printf("Network init\n");
     network_init(&cspace, timer_vaddr, ntfn);
+    #endif
 
     /* Initialises the timer */
     printf("Timer init\n");
@@ -598,8 +600,11 @@ int main(void)
      * goes via the kernel)
      *
      * NOTE we share this uart with the kernel when the kernel is in debug mode. */
+    // meson UART only
+    #ifdef CONFIG_PLAT_ODROIDC2
     uart_init(&cspace);
     update_vputchar(uart_putchar);
+    #endif
 
     /* test print */
     printf("SOS Started!\n");

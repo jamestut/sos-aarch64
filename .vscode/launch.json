@@ -1,0 +1,32 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "SOS",
+            "type": "cppdbg",
+            "request": "launch",
+            //"program": "/root/aos/aos-2020-m0/build/images/sos-image-arm-qemu-arm-virt",
+            //"program": "/root/aos/aos-2020-m0/build/kernel/kernel.elf",
+            "program": "${workspaceRoot}/build/projects/aos/sos/sos",
+            //"program": "/root/aos/aos-2020-m0/build/apps/tty_test",
+            "cwd": "${workspaceRoot}/build",
+            "miDebuggerServerAddress": "localhost:1234",
+            "miDebuggerPath": "/root/aos/gnu/usr/bin/aarch64-linux-gnu-gdb",
+            "stopAtEntry": true,
+            "logging": { "trace": true, "traceResponse": true },
+            "setupCommands": [
+                {
+                    "description": "Directory for assembler",
+                    "text": "directory ${workspaceRoot}/build",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ],
+            "launchCompleteCommand": "None"
+        }
+    ]
+}

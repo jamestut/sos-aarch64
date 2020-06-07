@@ -1,0 +1,9 @@
+{
+    "search.exclude": {
+        "/build/*": true,
+        "/odroidbuild/*": true
+    },
+    "files.associations": {
+        "*.tcc": "c"
+    }
+}

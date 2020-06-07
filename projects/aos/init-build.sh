@@ -39,6 +39,7 @@ fi
 # Initialize cmake
 cmake \
 	-DAARCH64=TRUE \
+    -DPLATFORM=qemu-arm-virt \
 	-DCMAKE_TOOLCHAIN_FILE=${SCRIPT_PATH}/kernel/gcc.cmake \
 	-G Ninja \
 	$@ \

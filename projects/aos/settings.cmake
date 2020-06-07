@@ -11,11 +11,10 @@
 #
 cmake_minimum_required(VERSION 3.7.2)
 
-# set the build platform
-set(PLATFORM odroidc2 CACHE STRING "" FORCE)
-
 # build all libs as static
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+
+set(KernelOptimisation "-O1")
 
 set(project_dir "${CMAKE_CURRENT_LIST_DIR}")
 get_filename_component(resolved_path ${CMAKE_CURRENT_LIST_FILE} REALPATH)

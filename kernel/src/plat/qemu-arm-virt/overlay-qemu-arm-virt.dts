@@ -10,9 +10,12 @@
 		    &{/pl011@9000000},
 		    &{/psci};
 		seL4,kernel-devices =
+			&{/serial0},
             &{/pl011@9000000},
 		    &{/intc@8000000},
 		    &{/timer}; /* Watchdog timer */
 	};
-
+	serial0 {
+        compatible = "qemu-arm-virt,null-uart";
+    };
 };
