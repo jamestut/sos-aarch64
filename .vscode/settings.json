@@ -1,7 +1,7 @@
 {
     "search.exclude": {
         "/build/*": true,
-        "/odroidbuild/*": true
+        "/mesonbuild/*": true
     },
     "files.associations": {
         "*.tcc": "c"
