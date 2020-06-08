@@ -23,14 +23,12 @@
 #pragma once
 
 #include <sel4/sel4.h>
-#include <vka/vka.h>
-#include <vka/object.h>
 
 /* This struct is intended to be opaque, but is left here so you can
  * stack-allocate mutexes. Callers should not touch any of its members.
  */
 typedef struct {
-    vka_object_t notification;
+    seL4_CPtr notification;
     void *owner;
     unsigned int held;
 } sync_recursive_mutex_t;
@@ -50,16 +48,3 @@ int sync_recursive_mutex_lock(sync_recursive_mutex_t *mutex);
  * @param mutex         An initialised recursive mutex to release.
  * @return              0 on success, an error code on failure. */
 int sync_recursive_mutex_unlock(sync_recursive_mutex_t *mutex);
-
-/* Allocate and initialise a managed recursive mutex
- * @param vka           A VKA instance used to allocate a notification object.
- * @param mutex         A recursive mutex object to initialise.
- * @return              0 on success, an error code on failure. */
-int sync_recursive_mutex_new(vka_t *vka, sync_recursive_mutex_t *mutex);
-
-/* Deallocate a managed recursive mutex (do not use with sync_mutex_init)
- * @param vka           A VKA instance used to deallocate the notification object.
- * @param mutex         A recursive mutex object initialised by sync_recursive_mutex_new.
- * @return              0 on success, an error code on failure. */
-int sync_recursive_mutex_destroy(vka_t *vka, sync_recursive_mutex_t *mutex);
-

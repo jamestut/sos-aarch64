@@ -32,12 +32,12 @@ int sync_recursive_mutex_init(sync_recursive_mutex_t *mutex, seL4_CPtr notificat
     assert(seL4_DebugCapIdentify(notification) == 6);
 #endif
 
-    mutex->notification.cptr = notification;
+    mutex->notification = notification;
     mutex->owner = NULL;
     mutex->held = 0;
 
     /* Prime the endpoint. */
-    seL4_Signal(mutex->notification.cptr);
+    seL4_Signal(mutex->notification);
     return 0;
 }
 
@@ -48,7 +48,7 @@ int sync_recursive_mutex_lock(sync_recursive_mutex_t *mutex) {
     }
     if (thread_id() != mutex->owner) {
         /* We don't already have the mutex. */
-        seL4_Wait(mutex->notification.cptr, NULL);
+        seL4_Wait(mutex->notification, NULL);
         __atomic_thread_fence(__ATOMIC_ACQUIRE);
         assert(mutex->owner == NULL);
         mutex->owner = thread_id();
@@ -76,22 +76,7 @@ int sync_recursive_mutex_unlock(sync_recursive_mutex_t *mutex) {
     if (mutex->held == 0) {
         /* This was the outermost lock we held. Wake the next person up. */
         __atomic_store_n(&mutex->owner, NULL, __ATOMIC_RELEASE);
-        seL4_Signal(mutex->notification.cptr);
+        seL4_Signal(mutex->notification);
     }
-    return 0;
-}
-
-int sync_recursive_mutex_new(vka_t *vka, sync_recursive_mutex_t *mutex) {
-    int error = vka_alloc_notification(vka, &(mutex->notification));
-
-    if (error != 0) {
-        return error;
-    } else {
-        return sync_recursive_mutex_init(mutex, mutex->notification.cptr);
-    }
-}
-
-int sync_recursive_mutex_destroy(vka_t *vka, sync_recursive_mutex_t *mutex) {
-    vka_free_object(vka, &(mutex->notification));
     return 0;
 }
