@@ -77,6 +77,7 @@ target_link_libraries(
     picotcp_bsd
     nfs
     ethernet
+    sel4sync
     sos_Config
 )
 
