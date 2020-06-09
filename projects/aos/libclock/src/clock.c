@@ -276,43 +276,54 @@ int timer_irq(
         } else {
             // we will fire the timer anyway if it is 1 ms before the deadline :)
 
-            // copy data to this stack as we're going to free the content
-            // we do this so that if the callback does something w/ ourselves (e.g. add new timer)
-            // we will be safe.
-            struct clientinfo cli = *clock.queue->cli;
-            uint32_t id = clock.queue->cli - clock.clients;
+            // indicates the pause to the next queue
+            int64_t target_ms = 0;
+            // keep executing if target is 0
+            while(!target_ms) {
+                // copy data to this stack as we're going to free the content
+                // we do this so that if the callback does something w/ ourselves (e.g. add new timer)
+                // we will be safe.
+                struct clientinfo cli = *clock.queue->cli;
+                uint32_t id = clock.queue->cli - clock.clients;
 
-            // TODO: handle if the next queue has 0 timeout
-            // dequeue and free
-            void* currqueue = clock.queue;
-            memset(clock.queue->cli, 0, sizeof(struct clientinfo));
-            clock.queue = clock.queue->next;
-            free(currqueue);
-            --clock.clientscount;
-            // GRP01: debug
-            ZF_LOGI("Number of active clients after dequeue: %d", clock.clientscount);
+                // dequeue and free
+                void* currqueue = clock.queue;
+                memset(clock.queue->cli, 0, sizeof(struct clientinfo));
+                clock.queue = clock.queue->next;
+                free(currqueue);
+                --clock.clientscount;
 
-            // set the next timer if exists
-            if(clock.queue) {
-                // dista_ms is how much we've missed the deadline (or too early)
-                // update clock data
-                clock.ts_set = currtime;
-                int64_t target_ms = clock.queue->cli->remaining - dista_ms;
-                clock.ts_target = currtime + target_ms * 1000;
-                configure_timeout_hwchk(clock.regs, MESON_TIMER_A, true, false, TIMEOUT_TIMEBASE_1_MS, target_ms);
-            } else {
-                clock.timer_active = false;
+                // set the next timer if there still exists any queue 
+                if(clock.queue) {
+                    // update dista as we might spend some time doing previous processing
+                    dista_ms = (currtime - (int64_t)clock.ts_target) / 1000;
+                    target_ms = clock.queue->cli->remaining - dista_ms;
+                    // basically if we miss the next item, we want to execute it ASAP
+                    if(target_ms < 0)
+                        target_ms = 0;
+                    
+                    if(target_ms) {
+                        // update timer
+                        clock.ts_set = currtime;
+                        clock.ts_target = currtime + target_ms * 1000;
+                        clock.timer_active = true;
+                        configure_timeout_hwchk(clock.regs, MESON_TIMER_A, true, false, TIMEOUT_TIMEBASE_1_MS, target_ms);
+                    }
+                } else {
+                    clock.timer_active = false;
+                    target_ms = 42; // stop :)
+                }
+                // fire!
+                cli.callback(id, cli.data);
             }
-
-            // fire!
-            cli.callback(id, cli.data);
         }
     } else {
         ZF_LOGD("Received timer IRQ when timer is disabled.");
     }
 
     /* Acknowledge that the IRQ has been handled */
-    seL4_IRQHandler_Ack(irq_handler);
+    if(irq_handler)
+        seL4_IRQHandler_Ack(irq_handler);
     return CLOCK_R_OK;
 }
 
