@@ -58,6 +58,8 @@ add_executable(
     src/sos.lds
     src/utils.c
     src/threads.c
+    # debug
+    src/libclocktest.c
 )
 target_include_directories(sos PRIVATE "include")
 target_link_libraries(

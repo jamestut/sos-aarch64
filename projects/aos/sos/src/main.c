@@ -42,6 +42,9 @@
 #include "utils.h"
 #include "threads.h"
 
+// GRP01: debug
+#include "libclocktest.h"
+
 #include <aos/vsyscall.h>
 
 /*
@@ -551,8 +554,9 @@ NORETURN void *main_continued(UNUSED void *arg)
 
     /* Initialise the network hardware. (meson ethernet for now) */
     #ifdef CONFIG_PLAT_ODROIDC2
-    printf("Network init\n");
-    network_init(&cspace, timer_vaddr, ntfn);
+    // TODO: reenable ethernet (this is disabled to make debugging quicker)
+    // printf("Network init\n");
+    // network_init(&cspace, timer_vaddr, ntfn);
     #endif
 
     /* Initialises the timer */
@@ -560,6 +564,10 @@ NORETURN void *main_continued(UNUSED void *arg)
     start_timer(timer_vaddr);
     /* You will need to register an IRQ handler for the timer here.
      * See "irq.h". */
+
+    // GRP01: debug
+    libclocktest_begin();
+    libclocktest_manual_action();
 
     /* Start the user application */
     printf("Start first process\n");
