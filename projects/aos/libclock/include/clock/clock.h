@@ -75,3 +75,8 @@ int timer_irq(
     seL4_Word irq,
     seL4_IRQHandler irq_handler
 );
+
+/*
+ * Ticking timer. Just for debugging.
+ */
+void timer_tick();

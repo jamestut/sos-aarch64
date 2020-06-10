@@ -42,6 +42,9 @@
 #include "utils.h"
 #include "threads.h"
 
+// GRP01: for testing M01
+#include "libclocktest.h"
+
 #include <aos/vsyscall.h>
 
 /*
@@ -549,15 +552,23 @@ NORETURN void *main_continued(UNUSED void *arg)
      * so touching the watchdog timers here is not recommended!) */
     void *timer_vaddr = sos_map_device(&cspace, PAGE_ALIGN_4K(TIMER_MAP_BASE), PAGE_SIZE_4K);
 
-    /* Initialise the network hardware. */
-    printf("Network init\n");
-    network_init(&cspace, timer_vaddr, ntfn);
+    /* Initialise the network hardware. (meson ethernet for now) */
+    #ifdef CONFIG_PLAT_ODROIDC2
+    // TODO: reenable ethernet (this is disabled to make debugging quicker)
+    // printf("Network init\n");
+    // network_init(&cspace, timer_vaddr, ntfn);
+    #endif
 
     /* Initialises the timer */
     printf("Timer init\n");
     start_timer(timer_vaddr);
     /* You will need to register an IRQ handler for the timer here.
      * See "irq.h". */
+
+    // GRP01: for testing M01
+    libclocktest_begin();
+    // we expect this to do nothing for non odroidc2
+    libclocktest_manual_action();
 
     /* Start the user application */
     printf("Start first process\n");
@@ -598,8 +609,11 @@ int main(void)
      * goes via the kernel)
      *
      * NOTE we share this uart with the kernel when the kernel is in debug mode. */
+    // meson UART only
+    #ifdef CONFIG_PLAT_ODROIDC2
     uart_init(&cspace);
     update_vputchar(uart_putchar);
+    #endif
 
     /* test print */
     printf("SOS Started!\n");

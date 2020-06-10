@@ -58,6 +58,8 @@ add_executable(
     src/sos.lds
     src/utils.c
     src/threads.c
+    # GRP01: test M01
+    src/libclocktest.c
 )
 target_include_directories(sos PRIVATE "include")
 target_link_libraries(
@@ -77,6 +79,7 @@ target_link_libraries(
     picotcp_bsd
     nfs
     ethernet
+    sel4sync
     sos_Config
 )
 
