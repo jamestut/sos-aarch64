@@ -26,7 +26,7 @@
 
 // structure to contain the registered client info.
 struct clientinfo {
-    uint64_t remaining; // milliseconds
+    uint64_t target_ts;
     timer_callback_t callback;
     void* data;
 };
@@ -51,20 +51,21 @@ static struct {
     // must be maintained from earliest to latest
     struct llnode* queue;
 
-    // timestamp when the timer was set
-    uint64_t ts_set;
     // target timestamp
     uint64_t ts_target;
     // indicates if we set an interrupt timer
     bool timer_active;
-} clock = {.started = false, .clockhand = 1, .handlerA = 0, .timer_active = false,
-    .ts_set = 0};
+} clock = {.started = false, .clockhand = 1, .handlerA = 0, .timer_active = false};
 
 // GRP01: for local debug
-#ifdef CONFIG_PLAT_QEMU_ARM_VIRT
+#ifndef CONFIG_PLAT_ODROIDC2
 static struct {
     uint64_t currtime;
-} fakestate = {.currtime = 0};
+    int64_t timeout;
+    int64_t timeout_set;
+    bool enabled;
+    bool periodic;
+} fakestate = {.currtime = 0, .timeout = 0, .enabled = false};
 #endif
 
 /* procedures private to this compilation unit */
@@ -149,10 +150,12 @@ uint32_t register_timer(uint64_t delay, timer_callback_t callback, void *data)
         return 0;
     }
 
-    // convert delay to millisecond, and make it at least 1 ms
-    delay /= 1000;
+    uint64_t curr_ts = get_time();
+
+    // make it at least 1 us
     if(!delay)
-        ++delay;
+        delay = 1;
+    uint64_t target_ts = curr_ts + delay;
 
     // find a slot
     uint32_t ret = 0;
@@ -173,29 +176,25 @@ uint32_t register_timer(uint64_t delay, timer_callback_t callback, void *data)
         struct clientinfo* target = clock.clients + ret;
         target->callback = callback;
         target->data = data;
+        target->target_ts = target_ts;
         ++clock.clientscount;
 
         // find a slot to put this handler on in the queue
+        // remember, the queue have to be maintained ascending order by target_ts
         struct llnode** prevptr = &clock.queue; // ptr to curr
         struct llnode* curr = clock.queue;
         while(curr) {
-            if(curr->cli->remaining > delay)
+            if(curr->cli->target_ts > target_ts)
                 break;
             
-            delay -= curr->cli->remaining;
             prevptr = &curr->next;
             curr = curr->next;
         }
 
+        // put in the queue
         *prevptr = malloc(sizeof(struct llnode));
         (*prevptr)->cli = target;
         (*prevptr)->next = curr;
-        
-        target->remaining = delay;
-
-        // if we have a next node, ensure that the next node remaining is substracted
-        if(curr) 
-            curr->cli->remaining -= delay;
 
         // if we modify the queue head, also modify the current active timer.
         if(target == clock.queue->cli)
@@ -225,13 +224,10 @@ int remove_timer(uint32_t id)
     
     // remove from queue
     struct llnode** prevptr = &clock.queue;
-    struct llnode* curr = clock.queue;    
+    struct llnode* curr = clock.queue;
     while(curr) {
         if(curr->cli == target) {
             *prevptr = curr->next;
-            // update the time remaining of the next node, if exists
-            if(*prevptr)
-                (*prevptr)->cli->remaining += target->remaining;
             
             // update timer if this is the first in queue
             if(curr == clock.queue)
@@ -259,15 +255,14 @@ int timer_irq(
 {
     ZF_LOGD("Timer IRQ handler invoked.");
 
+    // make sure that we're in valid state before doing something,
+    // that is, we're active and has pending queue.
     if(clock.started && clock.queue) {
         int64_t currtime = get_time();
         
-        int64_t dista_ms = (currtime - (int64_t)clock.ts_target) / 1000;
-
-        // GRP01: just for debugging
-        // #ifdef CONFIG_PLAT_QEMU_ARM_VIRT
-        // dista_ms = 0;
-        // #endif
+        // distance to the deadline in milliseconds
+        int64_t dista_ms = ((int64_t)currtime - (int64_t)clock.ts_target) / 1000;
+        ZF_LOGD("dista_ms = %d", dista_ms);
 
         if(dista_ms < -1) {
             // still faraway to the deadline. set the timer again and do nothing!
@@ -295,21 +290,26 @@ int timer_irq(
 
                 // set the next timer if there still exists any queue 
                 if(clock.queue) {
+                    ZF_LOGD("Next queue exists.");
                     // update dista as we might spend some time doing previous processing
-                    dista_ms = (currtime - (int64_t)clock.ts_target) / 1000;
-                    target_ms = clock.queue->cli->remaining - dista_ms;
-                    // basically if we miss the next item, we want to execute it ASAP
-                    if(target_ms < 0)
-                        target_ms = 0;
+                    currtime = get_time();
+                    dista_ms = ((int64_t)currtime - (int64_t)clock.ts_target) / 1000;
+                    target_ms = ((int64_t)clock.queue->cli->target_ts - (int64_t)currtime) / 1000 - dista_ms;
+                    ZF_LOGD("Next queue. dista_ms = %d, target_ms = %d", dista_ms, target_ms);
                     
-                    if(target_ms) {
-                        // update timer
-                        clock.ts_set = currtime;
-                        clock.ts_target = currtime + target_ms * 1000;
-                        clock.timer_active = true;
+                    // if we have some time processing the next item, then let the timer
+                    // wake us up if it is the time :)
+                    if(target_ms >= 1) {
+                        ZF_LOGD("Setting timer for next queue.");
+                        clock.ts_target = clock.queue->cli->target_ts;
                         configure_timeout_hwchk(clock.regs, MESON_TIMER_A, true, false, TIMEOUT_TIMEBASE_1_MS, target_ms);
+                    } else {
+                        // missed the deadline. execute next queue ASAP.
+                        ZF_LOGD("Executing the next queue directly.");
+                        target_ms = 0;
                     }
                 } else {
+                    // no more queue = disable timer
                     clock.timer_active = false;
                     target_ms = 42; // stop :)
                 }
@@ -341,7 +341,6 @@ int stop_timer(void)
     return CLOCK_R_OK;
 }
 
-
 void update_timer(void)
 {
     if(!clock.queue)
@@ -357,29 +356,22 @@ void update_timer(void)
 
     if(clock.timer_active) {
         // update the existing active timer
-        // elapsed time between the last time we set the timer and now.
-        ZF_LOGF_IF(curr_ts < clock.ts_set, "Timer was set in the future.");
-        uint64_t elapsed_ms = (curr_ts - clock.ts_set) / 1000;
         
         // new target
-        // when the timer has to fire
-        int64_t target_ms = clock.queue->cli->remaining - elapsed_ms;
-        // what is the actual target relative to when the time was started prior
-        clock.ts_target = clock.ts_set + (clock.queue->cli->remaining) * 1000;
-        
-        if(target_ms <= 0)
-            // we've missed the deadline. set timer to fire immediately!
-            configure_timeout_hwchk(clock.regs, MESON_TIMER_A, true, false, TIMEOUT_TIMEBASE_1_MS, 1);
-        else
-            configure_timeout_hwchk(clock.regs, MESON_TIMER_A, true, false, TIMEOUT_TIMEBASE_1_MS, target_ms);
+        clock.ts_target = clock.queue->cli->target_ts;
+        // remaining time in ms to target
+        int64_t rem_ms = ((int64_t)clock.ts_target - (int64_t)curr_ts) / 1000;
+
+        // the hwchk version will automatically truncate large values and <1 to 1.
+        configure_timeout_hwchk(clock.regs, MESON_TIMER_A, true, false, TIMEOUT_TIMEBASE_1_MS, rem_ms);
     } else {
-        // just set the timer here
-        clock.ts_set = curr_ts;
-        clock.ts_target = curr_ts + (clock.queue->cli->remaining) * 1000;
+        // just set the timer variables here
+        clock.ts_target = clock.queue->cli->target_ts;
         clock.timer_active = true;
         
         // actually configure the hardware
-        configure_timeout_hwchk(clock.regs, MESON_TIMER_A, true, false, TIMEOUT_TIMEBASE_1_MS, clock.queue->cli->remaining);
+        configure_timeout_hwchk(clock.regs, MESON_TIMER_A, true, false, TIMEOUT_TIMEBASE_1_MS,
+            (clock.ts_target - curr_ts) / 1000);
     }
 }
 
@@ -396,7 +388,41 @@ void configure_timeout_hwchk(volatile meson_timer_reg_t *regs, timeout_id_t time
     }
     configure_timeout(regs, timer, enable, periodic, timebase, timeout);
     #else
-    ZF_LOGW("Meson timer configuration not available on this platform. Using fake state instead.");
-    fakestate.currtime += timeout * 1000;
+    ZF_LOGW("Meson timer configuration not available on this platform. Using mock state.");
+    switch(timebase) {
+        case TIMEOUT_TIMEBASE_1_US:
+            fakestate.timeout = timeout;
+            break;
+        case TIMEOUT_TIMEBASE_10_US:
+            fakestate.timeout = timeout * 10;
+            break;
+        case TIMEOUT_TIMEBASE_100_US:
+            fakestate.timeout = timeout * 100;
+            break;
+        case TIMEOUT_TIMEBASE_1_MS:
+            fakestate.timeout = timeout * 1000;
+            break;
+    }
+    fakestate.timeout_set = fakestate.timeout;
+    fakestate.enabled = enable;
+    fakestate.periodic = periodic;
+    #endif
+}
+
+void timer_tick()
+{
+    #ifndef CONFIG_PLAT_ODROIDC2
+    const uint64_t acc = 10000; // in us
+    fakestate.currtime += acc;
+    if(fakestate.enabled) {
+        fakestate.timeout -= acc;
+        if(fakestate.timeout <= 0) {
+            if(fakestate.periodic)
+                fakestate.timeout = fakestate.timeout_set;
+            else
+                fakestate.enabled = false;
+            timer_irq(NULL, 0, 0);
+        }
+    }
     #endif
 }
