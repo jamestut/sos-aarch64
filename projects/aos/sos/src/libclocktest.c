@@ -26,7 +26,8 @@ void callback_periodically(uint32_t id, void *data)
 void callback_delete(uint32_t id, void* data)
 {
     int result = remove_timer((uint32_t)data);
-    printf("Removing timer %d %s.\n", result == CLOCK_R_OK ? "succeeded" : "failed");
+    printf("Removing timer %d %s.\n", (uint32_t)data,
+        result == CLOCK_R_OK ? "succeeded" : "failed");
 }
 
 void test1()
