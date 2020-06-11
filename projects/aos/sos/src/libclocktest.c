@@ -2,6 +2,7 @@
 
 #include <aos/sel4_zf_logif.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <clock/clock.h>
 #include <stddef.h>
 
@@ -15,49 +16,69 @@ void callback1(uint32_t id, void *data)
 
 void callback_periodically(uint32_t id, void *data)
 {
-    printf("CP1 %llu ms.\n", get_time()/1000);
-    // ZF_LOGI("Timer callback periodically. ID = %d, Timestamp = %llu ms.",
-    //     id, get_time()/1000);
-    register_timer(123 * 1000, callback_periodically, data);
+    // param data = hi 32 = number, lo 32 = delay in ms.
+    uintptr_t cdata = data;
 
-    // remove_timer(11);
-    // remove_timer(12);
+    printf("CP %d @ %llu ms.\n", (cdata >> 32ULL), get_time()/1000);
+    register_timer((cdata & 0xFFFFFFFFULL) * 1000, callback_periodically, data);
 }
 
-void callback_periodically_2(uint32_t id, void *data)
+void callback_delete(uint32_t id, void* data)
 {
-    printf("CP2 %llu ms.\n", get_time()/1000);
-    // ZF_LOGI("Timer callback periodically. ID = %d, Timestamp = %llu ms.",
-    //     id, get_time()/1000);
-    register_timer(350 * 1000, callback_periodically_2, data);
+    int result = remove_timer((uint32_t)data);
+    printf("Removing timer %d %s.\n", result == CLOCK_R_OK ? "succeeded" : "failed");
 }
 
-void callback_periodically_3(uint32_t id, void *data)
+void test1()
 {
-    printf("CP3 %llu ms.\n", get_time()/1000);
-    // ZF_LOGI("Timer callback periodically. ID = %d, Timestamp = %llu ms.",
-    //     id, get_time()/1000);
-    register_timer(660 * 1000, callback_periodically_3, data);
+    register_timer(15000 * 1000, callback1, (void*)123);
+    register_timer(17000 * 1000, callback1, (void*)456);
+    register_timer(7000 * 1000, callback1, (void*)777);
+    register_timer(2000 * 1000, callback1, (void*)222);
+    register_timer(1000 * 1000, callback_periodically, (void*)((1ULL << 32ULL) | 123ULL));
+    register_timer(1000 * 1000, callback_periodically, (void*)((2ULL << 32ULL) | 350ULL));
+    register_timer(1000 * 1000, callback_periodically, (void*)((3ULL << 32ULL) | 660ULL));
+    register_timer(6000 * 1000, callback1, (void*)555);
+    register_timer(6000 * 1000, callback1, (void*)556);
+    register_timer(6000 * 1000, callback1, (void*)557);
+    register_timer(8000 * 1000, callback1, (void*)558);
+    register_timer(3000 * 1000, callback1, (void*)1997);
+    register_timer(100000 * 1000, callback1, (void*)1000000);
+    register_timer(200000 * 1000, callback1, (void*)2000000);
+}
+
+void test2()
+{
+    // a lot of pending timers :)
+    for(int i=1; i<=2048; ++i) {
+        if(!register_timer(i * 100000, callback1, (void*)i)) {
+            printf("Registered %d timers before failed.\n", i);
+            break;
+        }
+    }
+}
+
+void test3()
+{
+    uintptr_t id;
+    register_timer(15000 * 1000, callback1, (void*)123);
+    register_timer(17000 * 1000, callback1, (void*)456);
+    register_timer(11000 * 1000, callback_periodically, (void*)222);
+    id = register_timer(7000 * 1000, callback1, (void*)777);
+    register_timer(2000 * 1000, callback_delete, (void*)id);
+    register_timer(6000 * 1000, callback1, (void*)555);
+    register_timer(6000 * 1000, callback1, (void*)556);
+    register_timer(6000 * 1000, callback1, (void*)557);
+    id = register_timer(10000 * 1000, callback1, (void*)558000);
+    register_timer(9500 * 1000, callback_delete, (void*)id);
+    register_timer(3000 * 1000, callback1, (void*)1997);
+    register_timer(100000 * 1000, callback1, (void*)1000000);
+    register_timer(200000 * 1000, callback1, (void*)2000000);    
 }
 
 void libclocktest_begin(void)
 {
-    uint32_t id;
-    id = register_timer(15000 * 1000, callback1, (void*)123);
-    id = register_timer(17000 * 1000, callback1, (void*)456);
-    id = register_timer(7000 * 1000, callback1, (void*)777);
-    id = register_timer(2000 * 1000, callback1, (void*)222);
-    id = register_timer(1000 * 1000, callback_periodically, (void*)222);
-    id = register_timer(1000 * 1000, callback_periodically_2, (void*)222);
-    id = register_timer(1000 * 1000, callback_periodically_3, (void*)222);
-    id = register_timer(6000 * 1000, callback1, (void*)555);
-    id = register_timer(6000 * 1000, callback1, (void*)556);
-    id = register_timer(6000 * 1000, callback1, (void*)557);
-    id = register_timer(8000 * 1000, callback1, (void*)558);
-    id = register_timer(3000 * 1000, callback1, (void*)1997);
-    id = register_timer(100000 * 1000, callback1, (void*)1000000);
-    id = register_timer(200000 * 1000, callback1, (void*)2000000);
-    //ZF_LOGI("Registered timer with ID = %d", id);
+    test3();
 }
 
 void libclocktest_manual_action(void)
