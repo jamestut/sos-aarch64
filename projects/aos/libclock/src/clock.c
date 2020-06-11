@@ -22,7 +22,7 @@
 #include "soslinkage.h"
 
 // maximum numbers of clients registered
-#define MAXCLIENTS 16
+#define MAXCLIENTS 1024
 
 // structure to contain the registered client info.
 struct clientinfo {
@@ -174,6 +174,13 @@ uint32_t register_timer(uint64_t delay, timer_callback_t callback, void *data)
     }
 
     if(ret) {
+        // create a new queue entry
+        struct llnode * qe = malloc(sizeof(struct llnode));
+        if(!qe) {
+            ZF_LOGE("Cannot malloc a queue entry for timer.");
+            return CLOCK_R_FAIL;
+        }
+
         struct clientinfo* target = clock.clients + ret;
         target->callback = callback;
         target->data = data;
@@ -193,7 +200,7 @@ uint32_t register_timer(uint64_t delay, timer_callback_t callback, void *data)
         }
 
         // put in the queue
-        *prevptr = malloc(sizeof(struct llnode));
+        *prevptr = qe;
         (*prevptr)->cli = target;
         (*prevptr)->next = curr;
 
