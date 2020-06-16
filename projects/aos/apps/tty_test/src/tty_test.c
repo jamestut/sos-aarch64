@@ -26,8 +26,13 @@
 #include <stdint.h>
 #include <sel4/sel4.h>
 #include <syscalls.h>
+#include <string.h>
 
 #include "ttyout.h"
+
+#define PAGE_SIZE_4K 0x1000
+
+char mymem[256];
 
 // Block a thread forever
 // we do this by making an unimplemented system call.
@@ -44,12 +49,30 @@ static void thread_block(void)
     /* Currently SOS does not reply -- so we never come back here */
 }
 
+static void test_syscall()
+{
+    const char * mystr = "Hello Syscall!";
+    void* target = (uintptr_t)seL4_GetIPCBuffer() + PAGE_SIZE_4K;
+    printf("Address of mystr = %p\n", mystr);
+    printf("Address of IPC buff = %p\n", target);
+    seL4_MessageInfo_t tag = seL4_MessageInfo_new(0, 0, 0, 4);
+    seL4_SetMR(0, 555);
+    seL4_SetMR(1, strlen(mystr));
+    uintptr_t addr = mystr;
+    strcpy(target, mystr);
+    seL4_Call(SYSCALL_ENDPOINT_SLOT, tag);
+}
+
 int main(void)
 {
     sosapi_init_syscall_table();
 
     /* initialise communication */
     ttyout_init();
+
+    while(1) {
+        test_syscall();
+    }
 
     do {
         printf("task:\tHello world, I'm\ttty_test!\n");

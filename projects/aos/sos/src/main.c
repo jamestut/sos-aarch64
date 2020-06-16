@@ -96,6 +96,11 @@ static struct {
     ut_t *ipc_buffer_ut;
     seL4_CPtr ipc_buffer;
 
+    ut_t *ipc_buffer_large_ut;
+    seL4_CPtr ipc_buffer_large;
+    seL4_CPtr ipc_buffer_large_local;
+    void* ipc_buffer_large_ptr;
+
     ut_t *sched_context_ut;
     seL4_CPtr sched_context;
 
@@ -129,6 +134,11 @@ void handle_syscall(UNUSED seL4_Word badge, UNUSED int num_args, seL4_CPtr reply
         cspace_free_slot(&cspace, reply);
         break;
 
+    case 555:
+    {
+        char* test = tty_test_process.ipc_buffer_large_ptr;
+        break;
+    }
     default:
         ZF_LOGE("Unknown syscall %lu\n", syscall_number);
         /* don't reply to an unknown syscall */
@@ -359,6 +369,24 @@ bool start_first_process(char *app_name, seL4_CPtr ep)
         ZF_LOGE("Failed to alloc ipc buffer ut");
         return false;
     }
+    // create 2nd IPC buffer for passing large data
+    tty_test_process.ipc_buffer_large_ut = alloc_retype(&tty_test_process.ipc_buffer_large, seL4_ARM_SmallPageObject,
+        seL4_PageBits);
+    if (tty_test_process.ipc_buffer_large_ut == NULL) {
+        ZF_LOGE("Failed to alloc large ipc buffer ut");
+        return false;
+    }
+    // create another copy of this buffer, so that we can map it for ourself!
+    tty_test_process.ipc_buffer_large_local = cspace_alloc_slot(&cspace);
+    if(tty_test_process.ipc_buffer_large_local == seL4_CapNull) {
+        ZF_LOGE("Failed to allocate the 2nd large ipc frame cspace slot");
+        return false;
+    }
+    err = cspace_copy(&cspace, tty_test_process.ipc_buffer_large_local, &cspace, tty_test_process.ipc_buffer_large, seL4_AllRights);
+    if(err != 0) {
+        ZF_LOGE("Failed to copy large ipc frame capability");
+        return false;
+    }
 
     /* allocate a new slot in the target cspace which we will mint a badged endpoint cap into --
      * the badge is used to identify the process, which will come in handy when you have multiple
@@ -453,6 +481,23 @@ bool start_first_process(char *app_name, seL4_CPtr ep)
                     seL4_AllRights, seL4_ARM_Default_VMAttributes);
     if (err != 0) {
         ZF_LOGE("Unable to map IPC buffer for user app");
+        return false;
+    }
+
+    // extra page for large data that has to be passed thru IPC
+    err = map_frame(&cspace, tty_test_process.ipc_buffer_large, tty_test_process.vspace, PROCESS_IPC_BUFFER + PAGE_SIZE_4K,
+                    seL4_AllRights, seL4_ARM_Default_VMAttributes);
+    if (err != 0) {
+        ZF_LOGE("Unable to map larger IPC buffer for user app");
+        return false;
+    }
+    // also map it to ourself!
+    // TODO: GRP01 do not hardcode the value like this for the next milestones!
+    tty_test_process.ipc_buffer_large_ptr = SOS_IPC_BUFFER + PAGE_SIZE_4K;
+    err = map_frame(&cspace, tty_test_process.ipc_buffer_large_local, seL4_CapInitThreadVSpace, tty_test_process.ipc_buffer_large_ptr,
+        seL4_AllRights, seL4_ARM_Default_VMAttributes);
+    if (err != 0) {
+        ZF_LOGE("Unable to map larger IPC buffer for SOS itself");
         return false;
     }
 
@@ -566,9 +611,9 @@ NORETURN void *main_continued(UNUSED void *arg)
      * See "irq.h". */
 
     // GRP01: for testing M01
-    libclocktest_begin();
+    //libclocktest_begin();
     // we expect this to do nothing for non odroidc2
-    libclocktest_manual_action();
+    //libclocktest_manual_action();
 
     /* Start the user application */
     printf("Start first process\n");
