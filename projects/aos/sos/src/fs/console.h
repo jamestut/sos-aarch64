@@ -2,6 +2,8 @@
 
 #include <stdint.h>
 
+void console_fs_init(void);
+
 int console_fs_open(const char* fn, int mode);
 
 int32_t console_fs_read(int id, void* ptr, uint32_t len);

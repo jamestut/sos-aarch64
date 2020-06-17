@@ -58,13 +58,33 @@ struct bg_open_param {
     int mode;
 };
 
+struct bg_rw_param {
+    bool read; //false = write
+    void* buff;
+    uint32_t len;
+    seL4_Word pid;
+    int fh;
+    seL4_CPtr reply;
+    ut_t* reply_ut;
+};
+
+struct bg_close_param {
+    seL4_Word pid;
+    int fh;
+    seL4_CPtr reply;
+    ut_t* reply_ut;
+};
+
 // local variables declaration area
 
 struct filetable ft[MAX_PID];
 
 // local functions declaration area
-
+void send_and_free_reply_cap(int response, seL4_CPtr reply, ut_t* reply_ut);
 void bg_fileman_open(void* data);
+void bg_fileman_rw(void* data);
+void bg_fileman_close(void* data);
+inline int fileman_rw_dispatch(bool read, seL4_Word pid, int fh, seL4_CPtr reply, ut_t* reply_ut, void* buff, uint32_t len);
 
 // function definitions area
 
@@ -120,12 +140,12 @@ int fileman_open(seL4_Word pid, seL4_CPtr reply, ut_t* reply_ut, const char* fil
     // error checking
     // bad pid
     if((pid >= MAX_PID) || (!ft[pid].used))
-        return EBADF;
+        return EBADF * -1;
 
     // prepare for run the open in background
     struct bg_open_param * param = malloc(sizeof(struct bg_open_param));
     if(!param)
-        return ENOMEM;
+        return ENOMEM * -1;
     param->filename = filename; // WARNING! won't work on multithreaded processes!
     param->mode = mode;
     param->pid = pid;
@@ -134,6 +154,75 @@ int fileman_open(seL4_Word pid, seL4_CPtr reply, ut_t* reply_ut, const char* fil
 
     bgworker_enqueue_callback(bg_fileman_open, param);
     return 0;
+}
+
+int fileman_close(seL4_Word pid, seL4_CPtr reply, ut_t* reply_ut, int fh)
+{
+    // basic error check
+    if((pid >= MAX_PID) || (!ft[pid].used))
+        return 1;
+    if((fh < 0) || fh >= MAX_FH)
+        return 1;
+
+    // run in bg. close operation may block when waiting for lock, for example
+    struct bg_close_param * param = malloc(sizeof(struct bg_close_param));
+    if(!param)
+        return ENOMEM * -1;
+    param->pid = pid;
+    param->fh = fh;
+    param->reply = reply;
+    param->reply_ut = reply_ut;
+
+    bgworker_enqueue_callback(bg_fileman_close, param);
+    return 0;
+}
+
+int fileman_write(seL4_Word pid, int fh, seL4_CPtr reply, ut_t* reply_ut, void* buff, uint32_t len)
+{
+    return fileman_rw_dispatch(false, pid, fh, reply, reply_ut, buff, len);
+}
+
+int fileman_read(seL4_Word pid, int fh, seL4_CPtr reply, ut_t* reply_ut, void* buff, uint32_t len)
+{
+    return fileman_rw_dispatch(true, pid, fh, reply, reply_ut, buff, len);
+}
+
+int fileman_rw_dispatch(bool read, seL4_Word pid, int fh, seL4_CPtr reply, ut_t* reply_ut, void* buff, uint32_t len)
+{
+    // error checking
+    // bad pid
+    if((pid >= MAX_PID) || (!ft[pid].used))
+        return EBADF * -1;
+
+    // bad fh
+    if((fh < 0) || fh >= MAX_FH)
+        return EBADF * -1;
+
+    // prepare for bg run
+    struct bg_rw_param * param = malloc(sizeof(struct bg_rw_param));
+    if(!param)
+        return ENOMEM * -1;
+    param->read = read;
+    param->pid = pid;
+    param->fh = fh;
+    param->buff = buff;
+    param->len = len;
+    param->reply = reply;
+    param->reply_ut = reply_ut;
+
+    bgworker_enqueue_callback(bg_fileman_rw, param);
+    return 0;
+}
+
+void send_and_free_reply_cap(int response, seL4_CPtr reply, ut_t* reply_ut)
+{
+    seL4_MessageInfo_t reply_msg = seL4_MessageInfo_new(0, 0, 0, 1);
+    seL4_SetMR(0, response);
+    seL4_Send(reply, reply_msg);
+    // delete the reply cap for now (and mark the backing ut as free)
+    cspace_delete(&cspace, reply);
+    cspace_free_slot(&cspace, reply);
+    ut_free(reply_ut);
 }
 
 void bg_fileman_open(void* data)
@@ -199,13 +288,53 @@ void bg_fileman_open(void* data)
 
 finish:
     sync_mutex_unlock(&pft->felock);
-    // send to client directly
-    seL4_MessageInfo_t reply_msg = seL4_MessageInfo_new(0, 0, 0, 1);
-    seL4_SetMR(0, ret);
-    seL4_Send(param->reply, reply_msg);
-    // delete the reply cap for now (and mark the backing ut as free)
-    cspace_delete(&cspace, param->reply);
-    cspace_free_slot(&cspace, param->reply);
-    ut_free(param->reply_ut);
+    send_and_free_reply_cap(ret, param->reply, param->reply_ut);
+    free(param);
+}
+
+void bg_fileman_rw(void* data)
+{
+    struct bg_rw_param * param = data;
+    struct filetable* pft = ft + param->pid;
+    struct fileentry* pfe = pft->fe + param->fh;
+
+    // 0 or more = number of bytes writen (yes, can be 0!)
+    // negative = negative errno convention
+    int ret = 0;
+
+    // TODO: GRP01 use 2 step locking
+    sync_mutex_lock(&pft->felock);
+    if(!pfe->used) {
+        ret = EBADF * -1;
+        goto finish;
+    }
+
+    // action!
+    if(param->read)
+        ret = pfe->handler->read(pfe->id, param->buff, param->len);
+    else
+        ret = pfe->handler->write(pfe->id, param->buff, param->len);
+
+finish:
+    sync_mutex_unlock(&pft->felock);
+    send_and_free_reply_cap(ret, param->reply, param->reply_ut);
+    free(param);
+}
+
+void bg_fileman_close(void* data)
+{
+    struct bg_close_param * param = data;
+    struct filetable* pft = ft + param->pid;
+    struct fileentry* pfe = pft->fe + param->fh;
+
+    sync_mutex_lock(&pft->felock);
+    if(pfe->used) {
+        pfe->handler->close(pfe->id);
+        pfe->used = false;
+    }
+    
+    //finish:
+    sync_mutex_unlock(&pft->felock);
+    send_and_free_reply_cap(1, param->reply, param->reply_ut);
     free(param);
 }

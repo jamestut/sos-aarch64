@@ -13,16 +13,20 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 #include <sos.h>
 
 #include <sel4/sel4.h>
 #include <errno.h>
+#include <utils/arith.h>
 
 #include "util.h"
 #include "sossysnr.h"
 
 
 #define SYSCALL_ENDPOINT_SLOT 1
+
+inline int sos_sys_rw(bool read, int file, char *buf, size_t nbyte);
 
 int sos_sys_open(const char *path, fmode_t mode)
 {
@@ -42,25 +46,31 @@ int sos_sys_open(const char *path, fmode_t mode)
 
     msginfo = seL4_Call(SYSCALL_ENDPOINT_SLOT, msginfo);
 
-    return seL4_GetMR(0);
+    int ret = seL4_GetMR(0);
+    if(ret < 0) {
+        errno = ret * -1;
+        return -1;
+    }
+    return ret;
 }
 
 int sos_sys_close(int file)
 {
-    assert(!"You need to implement this");
-    return -1;
+    seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, 2);
+    seL4_SetMR(0, SOS_SYSCALL_CLOSE);
+    seL4_SetMR(1, file);
+    seL4_Call(SYSCALL_ENDPOINT_SLOT, msginfo);
+    return 0;
 }
 
 int sos_sys_read(int file, char *buf, size_t nbyte)
 {
-    assert(!"You need to implement this");
-    return -1;
+    return sos_sys_rw(true, file, buf, nbyte);
 }
 
 int sos_sys_write(int file, const char *buf, size_t nbyte)
 {
-    assert(!"You need to implement this");
-    return -1;
+    return sos_sys_rw(false, file, buf, nbyte);
 }
 
 int sos_getdirent(int pos, char *name, size_t nbyte)
@@ -116,4 +126,51 @@ int64_t sos_sys_time_stamp(void)
 {
     assert(!"You need to implement this");
     return -1;
+}
+
+int sos_sys_rw(bool read, int file, char *buf, size_t nbyte)
+{
+    void* bigipc = get_large_ipc_buffer();
+
+    seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, 3);
+    seL4_MessageInfo_t retinfo;
+
+    size_t rd = 0;
+
+    while(rd < nbyte) {
+        size_t numrd = MIN(nbyte - rd, PAGE_SIZE_4K);
+        
+        // write operation: copy from source to ipc
+        if(!read) {
+            memcpy(bigipc, buf, numrd);
+            // advance position
+            buf += numrd;
+        }
+
+        // syscall
+        seL4_SetMR(0, read ? SOS_SYSCALL_READ : SOS_SYSCALL_WRITE);
+        seL4_SetMR(1, file);
+        seL4_SetMR(2, numrd);
+        retinfo = seL4_Call(SYSCALL_ENDPOINT_SLOT, msginfo);
+        
+        int ret = seL4_GetMR(0);
+        if(ret < 0) {
+            errno = ret * -1;
+            return -1;
+        } else {
+            // read operation: copy from ipc to buf
+            if(read) {
+                memcpy(buf, bigipc, ret);
+                buf += ret;
+            }
+
+            rd += ret;
+            // if SOS indicated that it does less than we want, we reached EOF.
+            // stop now!
+            if(rd < numrd)
+                break;
+        }
+    }
+    
+    return rd;
 }

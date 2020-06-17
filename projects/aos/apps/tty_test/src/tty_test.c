@@ -27,6 +27,8 @@
 #include <sel4/sel4.h>
 #include <syscalls.h>
 #include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include "ttyout.h"
 
@@ -71,18 +73,23 @@ int main(void)
     ttyout_init();
 
     puts("TTY test = opening console!");
-    int fh = open("console");
+    int fh = open("console", O_RDWR);
     printf("TTY test = my fh is %d\n", fh);
+    write(fh, "hello serial! please type something!\n", 37);
+    
+    char mybuff[100];
+    int rd = read(fh, mybuff, sizeof(mybuff));
+    printf("Read %d bytes\n", rd);
+    mybuff[rd] = 0;
+    printf("Read from console: %s\n", mybuff);
 
-    while(1) {
-        test_syscall();
-    }
+    close(fh);
 
-    do {
-        printf("task:\tHello world, I'm\ttty_test!\n");
-        thread_block();
-        // sleep(1);    // Implement this as a syscall
-    } while (1);
+
+
+    // stop here and busy wait
+    puts("Finished testing. Doing nothing :)");
+    while(1) {}
 
     return 0;
 }

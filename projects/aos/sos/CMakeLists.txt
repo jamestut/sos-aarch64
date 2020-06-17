@@ -64,6 +64,7 @@ add_executable(
     src/bgworker.c
     src/fileman.c
     src/fs/console.c
+    src/fs/fakeconsole.c
 )
 target_include_directories(sos PRIVATE "include" "../libsosapi/include")
 target_link_libraries(

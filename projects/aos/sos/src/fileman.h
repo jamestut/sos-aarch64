@@ -38,11 +38,25 @@ void fileman_destroy(seL4_Word pid);
 
 // open a file handle.
 // @return errno if failed, 0 if pending.
-//         Result will be replied directly to the client once finishes.
+//         Result will be replied directly to the client once finishes,
+//         using negative errno semantic.
 int fileman_open(seL4_Word pid, seL4_CPtr reply, ut_t* reply_ut, const char* filename, int mode);
 
 // @param fh valid file handle for the given pid returned by fileman_open
-void fileman_close(seL4_Word pid, int fh);
+// @return 1 for immediate return, or 0 for pending operation.
+int fileman_close(seL4_Word pid, seL4_CPtr reply, ut_t* reply_ut, int fh);
+
+// write buffer to the underlying file system
+// @return errno if failed, 0 if pending.
+//         Result will be replied directly to the client once finishes,
+//         using negative errno semantic.
+int fileman_write(seL4_Word pid, int fh, seL4_CPtr reply, ut_t* reply_ut, void* buff, uint32_t len);
+
+// read to buffer from the underlying file system
+// @return errno if failed, 0 if pending.
+//         Result will be replied directly to the client once finishes,
+//         using negative errno semantic.
+int fileman_read(seL4_Word pid, int fh, seL4_CPtr reply, ut_t* reply_ut, void* buff, uint32_t len);
 
 // get errno number for functions that doesn't return error code directly
 int fileman_get_error(seL4_Word pid);

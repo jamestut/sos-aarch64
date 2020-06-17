@@ -50,6 +50,7 @@
 #include "libclocktest.h"
 
 // GRP01: M2
+#include "fs/console.h"
 #include "fileman.h"
 #include "bgworker.h"
 
@@ -119,7 +120,7 @@ static struct {
 } tty_test_process;
 
 
-void handle_syscall(UNUSED seL4_Word badge, UNUSED int num_args, seL4_CPtr reply, ut_t* reply_ut)
+void handle_syscall(seL4_Word badge, UNUSED int num_args, seL4_CPtr reply, ut_t* reply_ut)
 {
 
     /* get the first word of the message, which in the SOS protocol is the number
@@ -134,19 +135,33 @@ void handle_syscall(UNUSED seL4_Word badge, UNUSED int num_args, seL4_CPtr reply
     case SOS_SYSCALL_OPEN:
         // hard limit for string values
         if(seL4_GetMR(1) >= PAGE_SIZE_4K)
-            handler_ret = ENAMETOOLONG;
+            handler_ret = ENAMETOOLONG * -1;
         else {
             char * fn = tty_test_process.ipc_buffer_large_ptr;
             fn[seL4_GetMR(1)] = 0;
             handler_ret = fileman_open(badge, reply, reply_ut, fn, seL4_GetMR(2));
         }
         break;
-    case 555:
-    {
-        // TODO: GRP01 just for debug. remove this.
-        char* test = tty_test_process.ipc_buffer_large_ptr;
+    
+    case SOS_SYSCALL_CLOSE:
+        handler_ret = fileman_close(badge, reply, reply_ut, seL4_GetMR(1));
         break;
-    }
+    
+    case SOS_SYSCALL_READ:
+        if(seL4_GetMR(1) >= PAGE_SIZE_4K)
+            handler_ret = EMSGSIZE * -1;
+        else
+            handler_ret = fileman_read(badge, seL4_GetMR(1), reply, reply_ut, 
+                tty_test_process.ipc_buffer_large_ptr, seL4_GetMR(2));
+        break;
+
+    case SOS_SYSCALL_WRITE:
+        if(seL4_GetMR(1) >= PAGE_SIZE_4K)
+            handler_ret = EMSGSIZE * -1;
+        else 
+            handler_ret = fileman_write(badge, seL4_GetMR(1), reply, reply_ut, 
+                tty_test_process.ipc_buffer_large_ptr, seL4_GetMR(2));
+        break;
     default:
         ZF_LOGE("Unknown syscall %lu\n", syscall_number);
     }
@@ -642,8 +657,8 @@ NORETURN void *main_continued(UNUSED void *arg)
     /* Initialise the network hardware. (meson ethernet for now) */
     #ifdef CONFIG_PLAT_ODROIDC2
     // TODO: reenable ethernet (this is disabled to make debugging quicker)
-    // printf("Network init\n");
-    // network_init(&cspace, timer_vaddr, ntfn);
+    printf("Network init\n");
+    network_init(&cspace, timer_vaddr, ntfn);
     #endif
 
     /* Initialises the timer */
@@ -652,10 +667,8 @@ NORETURN void *main_continued(UNUSED void *arg)
     /* You will need to register an IRQ handler for the timer here.
      * See "irq.h". */
 
-    // GRP01: for testing M01
-    //libclocktest_begin();
-    // we expect this to do nothing for non odroidc2
-    //libclocktest_manual_action();
+    // init file systems
+    console_fs_init();
 
     /* Start the user application */
     printf("Start first process\n");
