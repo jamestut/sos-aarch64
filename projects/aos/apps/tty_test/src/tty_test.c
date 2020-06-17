@@ -29,12 +29,15 @@
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <errno.h>
+
+#include <sos.h>
 
 #include "ttyout.h"
 
 #define PAGE_SIZE_4K 0x1000
 
-char mymem[256];
+char mymem[40000];
 
 // Block a thread forever
 // we do this by making an unimplemented system call.
@@ -71,21 +74,30 @@ int main(void)
 
     /* initialise communication */
     ttyout_init();
+    puts("TTY test = starting console test!");
 
-    puts("TTY test = opening console!");
-    int fh = open("console", O_RDWR);
-    printf("TTY test = my fh is %d\n", fh);
-    write(fh, "hello serial! please type something!\n", 37);
+    int rs;
+
+    // initialize data for large writing
+    for(int i=0; i<sizeof(mymem); ++i)
+        mymem[i] = 'a' + (i % 26);
+
+    // test write large
+    int fh1 = open("console", O_RDWR);
+    printf("fh1 = %d\n", fh1);
+    printf("writing %d bytes\n", sizeof(mymem));
+    rs = write(fh1, mymem, sizeof(mymem));
+    printf("write result = %d\n", rs);
     
-    char mybuff[100];
-    int rd = read(fh, mybuff, sizeof(mybuff));
-    printf("Read %d bytes\n", rd);
-    mybuff[rd] = 0;
-    printf("Read from console: %s\n", mybuff);
+    puts("Test read");
+    while(1) {
+        int rd = read(fh1, mymem, sizeof(mymem));
+        printf("Read %d bytes\n", rd);
+        mymem[rd] = 0;
+        printf("Read from console: %s\n", mymem);
+    }
 
-    close(fh);
-
-
+    close(fh1);
 
     // stop here and busy wait
     puts("Finished testing. Doing nothing :)");

@@ -5,12 +5,15 @@
 #include <sync/condition_var.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <utils/arith.h>
 
 #include "../fileman.h"
 #include "../utils.h"
 #include "console.h"
 
 #define CIRC_BUFF_SZ 128
+
+#define MTU 960
 
 #define INC_POS(v) ((v+1) % CIRC_BUFF_SZ)
 #define MAX_SIZE 0x80000000U
@@ -76,7 +79,7 @@ void console_fs_init(void)
     }
 }
 
-int32_t console_fs_read(int id, void* ptr, uint32_t len)
+ssize_t console_fs_read(int id, void* ptr, size_t len)
 {
     if(id & PERM_RD) {
         // truncate!
@@ -109,11 +112,21 @@ int32_t console_fs_read(int id, void* ptr, uint32_t len)
         return EBADF * -1;
 }
 
-int32_t console_fs_write(int id, void* ptr, uint32_t len)
+ssize_t console_fs_write(int id, void* ptr, size_t len)
 {
-    if(id & PERM_WR) 
-        return serial_send(serhdl, ptr, len);
-    else
+    // WARNING! pico TCP might drop some data if it is larger than MTU
+    if(id & PERM_WR) {
+        size_t wr = 0;
+        uint8_t * src = ptr;
+        while(wr < len) {
+            size_t to_write = MIN(MTU, len - wr);
+            ssize_t written = serial_send(serhdl, src, to_write);
+            if(written < 0)
+                return EIO * -1;
+            wr += written;
+            src += written;
+        }
+    } else
         return EBADF * -1;
 }
 

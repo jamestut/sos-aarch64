@@ -35,6 +35,7 @@ int32_t console_fs_write(int id, void* ptr, uint32_t len)
     fputs("fake console: ", stdout);
     for(int i=0; i<len; ++i)
         putchar(cptr[i]);
+    putchar('\n');
     return len;
 }
 

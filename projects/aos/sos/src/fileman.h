@@ -18,7 +18,7 @@ typedef int (*file_open_fn)(const char* fn, int mode);
 //        ptr  target pointer to store/read
 //        len  max length to read/write
 // @return negative if fail, number of bytes read/written if success. 
-typedef int32_t (*file_rw_fn)(int id, void* ptr, uint32_t len);
+typedef ssize_t (*file_rw_fn)(int id, void* ptr, size_t len);
 
 // @param id whatever returned by file_open_fn
 typedef void (*file_close_fn)(int id);
@@ -57,6 +57,3 @@ int fileman_write(seL4_Word pid, int fh, seL4_CPtr reply, ut_t* reply_ut, void* 
 //         Result will be replied directly to the client once finishes,
 //         using negative errno semantic.
 int fileman_read(seL4_Word pid, int fh, seL4_CPtr reply, ut_t* reply_ut, void* buff, uint32_t len);
-
-// get errno number for functions that doesn't return error code directly
-int fileman_get_error(seL4_Word pid);

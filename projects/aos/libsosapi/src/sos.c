@@ -20,23 +20,23 @@
 #include <errno.h>
 #include <utils/arith.h>
 
-#include "util.h"
 #include "sossysnr.h"
 
+#define UINT32_LIMIT 0x7FFFFFFF
 
-#define SYSCALL_ENDPOINT_SLOT 1
+int sos_errno = 0;
 
 inline int sos_sys_rw(bool read, int file, char *buf, size_t nbyte);
 
 int sos_sys_open(const char *path, fmode_t mode)
 {
-    uint32_t len = strnlen(path, PAGE_SIZE_4K);
-    if(len >= PAGE_SIZE_4K) {
-        errno = ENAMETOOLONG;
+    uint32_t len = strnlen(path, MAX_IO_BUF);
+    if(len >= MAX_IO_BUF) {
+        sos_errno = ENAMETOOLONG;
         return -1;
     }
 
-    void* bigipc = get_large_ipc_buffer();
+    void* bigipc = sos_large_ipc_buffer();
     memcpy(bigipc, path, len);
 
     seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, 3);
@@ -44,11 +44,11 @@ int sos_sys_open(const char *path, fmode_t mode)
     seL4_SetMR(1, len);
     seL4_SetMR(2, mode);
 
-    msginfo = seL4_Call(SYSCALL_ENDPOINT_SLOT, msginfo);
+    msginfo = seL4_Call(SOS_IPC_EP_CAP, msginfo);
 
-    int ret = seL4_GetMR(0);
+    ssize_t ret = seL4_GetMR(0);
     if(ret < 0) {
-        errno = ret * -1;
+        sos_errno = ret * -1;
         return -1;
     }
     return ret;
@@ -59,7 +59,8 @@ int sos_sys_close(int file)
     seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, 2);
     seL4_SetMR(0, SOS_SYSCALL_CLOSE);
     seL4_SetMR(1, file);
-    seL4_Call(SYSCALL_ENDPOINT_SLOT, msginfo);
+    seL4_Call(SOS_IPC_EP_CAP, msginfo);
+    // close always success no matter what :)
     return 0;
 }
 
@@ -70,7 +71,7 @@ int sos_sys_read(int file, char *buf, size_t nbyte)
 
 int sos_sys_write(int file, const char *buf, size_t nbyte)
 {
-    return sos_sys_rw(false, file, buf, nbyte);
+    return sos_sys_rw(false, file, (char*)buf, nbyte);
 }
 
 int sos_getdirent(int pos, char *name, size_t nbyte)
@@ -130,7 +131,11 @@ int64_t sos_sys_time_stamp(void)
 
 int sos_sys_rw(bool read, int file, char *buf, size_t nbyte)
 {
-    void* bigipc = get_large_ipc_buffer();
+    // truncate, as we have to return in int (while nbyte could be 64 bit)
+    if(nbyte > UINT32_LIMIT)
+        nbyte = UINT32_LIMIT;
+
+    void* bigipc = sos_large_ipc_buffer();
 
     seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, 3);
     seL4_MessageInfo_t retinfo;
@@ -138,7 +143,7 @@ int sos_sys_rw(bool read, int file, char *buf, size_t nbyte)
     size_t rd = 0;
 
     while(rd < nbyte) {
-        size_t numrd = MIN(nbyte - rd, PAGE_SIZE_4K);
+        size_t numrd = MIN(nbyte - rd, MAX_IO_BUF);
         
         // write operation: copy from source to ipc
         if(!read) {
@@ -151,11 +156,11 @@ int sos_sys_rw(bool read, int file, char *buf, size_t nbyte)
         seL4_SetMR(0, read ? SOS_SYSCALL_READ : SOS_SYSCALL_WRITE);
         seL4_SetMR(1, file);
         seL4_SetMR(2, numrd);
-        retinfo = seL4_Call(SYSCALL_ENDPOINT_SLOT, msginfo);
+        retinfo = seL4_Call(SOS_IPC_EP_CAP, msginfo);
         
-        int ret = seL4_GetMR(0);
+        ssize_t ret = seL4_GetMR(0);
         if(ret < 0) {
-            errno = ret * -1;
+            sos_errno = ret * -1;
             return -1;
         } else {
             // read operation: copy from ipc to buf
@@ -173,4 +178,9 @@ int sos_sys_rw(bool read, int file, char *buf, size_t nbyte)
     }
     
     return rd;
+}
+
+void* sos_large_ipc_buffer(void)
+{
+    return (void*)((uintptr_t)seL4_GetIPCBuffer() + MAX_IO_BUF);
 }

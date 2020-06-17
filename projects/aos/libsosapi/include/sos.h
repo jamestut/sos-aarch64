@@ -148,3 +148,8 @@ int sos_share_vm(void *adr, size_t size, int writable);
  *
  * Returns 0 if successful, -1 otherwise (invalid address or size).
  */
+
+//GRP01's addon
+extern int sos_errno;
+
+void* sos_large_ipc_buffer(void);

@@ -80,7 +80,7 @@ struct bg_close_param {
 struct filetable ft[MAX_PID];
 
 // local functions declaration area
-void send_and_free_reply_cap(int response, seL4_CPtr reply, ut_t* reply_ut);
+void send_and_free_reply_cap(ssize_t response, seL4_CPtr reply, ut_t* reply_ut);
 void bg_fileman_open(void* data);
 void bg_fileman_rw(void* data);
 void bg_fileman_close(void* data);
@@ -214,7 +214,7 @@ int fileman_rw_dispatch(bool read, seL4_Word pid, int fh, seL4_CPtr reply, ut_t*
     return 0;
 }
 
-void send_and_free_reply_cap(int response, seL4_CPtr reply, ut_t* reply_ut)
+void send_and_free_reply_cap(ssize_t response, seL4_CPtr reply, ut_t* reply_ut)
 {
     seL4_MessageInfo_t reply_msg = seL4_MessageInfo_new(0, 0, 0, 1);
     seL4_SetMR(0, response);
@@ -300,7 +300,7 @@ void bg_fileman_rw(void* data)
 
     // 0 or more = number of bytes writen (yes, can be 0!)
     // negative = negative errno convention
-    int ret = 0;
+    ssize_t ret = 0;
 
     // TODO: GRP01 use 2 step locking
     sync_mutex_lock(&pft->felock);
