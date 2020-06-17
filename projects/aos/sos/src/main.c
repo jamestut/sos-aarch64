@@ -16,6 +16,8 @@
 #include <assert.h>
 #include <string.h>
 
+#include <errno.h>
+
 #include <cspace/cspace.h>
 #include <aos/sel4_zf_logif.h>
 #include <aos/debug.h>
@@ -27,6 +29,8 @@
 
 #include <sel4runtime.h>
 #include <sel4runtime/auxv.h>
+
+#include <sossysnr.h>
 
 #include "bootstrap.h"
 #include "irq.h"
@@ -44,6 +48,10 @@
 
 // GRP01: for testing M01
 #include "libclocktest.h"
+
+// GRP01: M2
+#include "fileman.h"
+#include "bgworker.h"
 
 #include <aos/vsyscall.h>
 
@@ -118,43 +126,61 @@ void handle_syscall(UNUSED seL4_Word badge, UNUSED int num_args, seL4_CPtr reply
      * of the SOS "syscall". */
     seL4_Word syscall_number = seL4_GetMR(0);
 
+    // store whatever the handler returns, and pass to app if non zero.
+    seL4_Word handler_ret = ENOSYS;
+
     /* Process system call */
     switch (syscall_number) {
-    case SOS_SYSCALL0:
-        ZF_LOGV("syscall: thread example made syscall 0!\n");
-        /* construct a reply message of length 1 */
-        seL4_MessageInfo_t reply_msg = seL4_MessageInfo_new(0, 0, 0, 1);
-        /* Set the first (and only) word in the message to 0 */
-        seL4_SetMR(0, 0);
-        /* Send the reply to the saved reply capability. */
-        seL4_Send(reply, reply_msg);
-        /* in MCS kernel, reply object is meant to be reused rather than freed */
-        /* Free the slot we allocated for the reply - it is now empty, as the reply
-         * capability was consumed by the send. */
-        cspace_free_slot(&cspace, reply);
+    case SOS_SYSCALL_OPEN:
+        // hard limit for string values
+        if(seL4_GetMR(1) >= PAGE_SIZE_4K)
+            handler_ret = ENAMETOOLONG;
+        else {
+            char * fn = tty_test_process.ipc_buffer_large_ptr;
+            fn[seL4_GetMR(1)] = 0;
+            handler_ret = fileman_open(badge, reply, fn, seL4_GetMR(2));
+        }
         break;
-
     case 555:
     {
+        // TODO: GRP01 just for debug. remove this.
         char* test = tty_test_process.ipc_buffer_large_ptr;
         break;
     }
     default:
         ZF_LOGE("Unknown syscall %lu\n", syscall_number);
-        /* don't reply to an unknown syscall */
+    }
+
+    // reply if handler_ret is not 0. otherwise, we assume that the handler will
+    // reply at some later point
+    if(handler_ret) {
+        seL4_MessageInfo_t reply_msg = seL4_MessageInfo_new(0, 0, 0, 1);
+        seL4_SetMR(0, handler_ret);
+        seL4_Send(reply, reply_msg);
+        /* in MCS kernel, reply object is meant to be reused rather than freed */
+        /* Free the slot we allocated for the reply - it is now empty, as the reply
+         * capability was consumed by the send. */
+        cspace_free_slot(&cspace, reply);
     }
 }
 
 NORETURN void syscall_loop(seL4_CPtr ep)
 {
     seL4_CPtr reply;
-    /* Create reply object */
-    ut_t *reply_ut = alloc_retype(&reply, seL4_ReplyObject, seL4_ReplyBits);
-    if (reply_ut == NULL) {
-        ZF_LOGF("Failed to alloc reply object ut");
-    }
 
     while (1) {
+        /* Create reply object */
+        // we'll need to realloc a new reply object, as the old one may take a while
+        // to be replied.
+        // TODO: GRP01 avoid UT leak
+        // TODO: GRP01 do not reallocate if a codepath doesn't use the reply object,
+        //             such as sos_handle_irq_notification
+        ut_t *reply_ut = alloc_retype(&reply, seL4_ReplyObject, seL4_ReplyBits);
+        if (reply_ut == NULL) {
+            ZF_LOGF("Failed to alloc reply object ut");
+        }
+        ut_free(reply_ut);
+
         seL4_Word badge = 0;
         /* Block on ep, waiting for an IPC sent over ep, or
          * a notification from our bound notification object */
@@ -493,11 +519,19 @@ bool start_first_process(char *app_name, seL4_CPtr ep)
     }
     // also map it to ourself!
     // TODO: GRP01 do not hardcode the value like this for the next milestones!
-    tty_test_process.ipc_buffer_large_ptr = SOS_IPC_BUFFER + PAGE_SIZE_4K;
-    err = map_frame(&cspace, tty_test_process.ipc_buffer_large_local, seL4_CapInitThreadVSpace, tty_test_process.ipc_buffer_large_ptr,
-        seL4_AllRights, seL4_ARM_Default_VMAttributes);
+    // WARNING! seL4 "might" not support 64 bit mem management, as the vaddr argument 
+    // in seL4_ARM_Page_Map only accepts seL4_Word
+    tty_test_process.ipc_buffer_large_ptr = (void*)(SOS_IPC_BUFFER + PAGE_SIZE_4K);
+    err = map_frame(&cspace, tty_test_process.ipc_buffer_large_local, seL4_CapInitThreadVSpace,
+        (seL4_Word)tty_test_process.ipc_buffer_large_ptr, seL4_AllRights, seL4_ARM_Default_VMAttributes);
     if (err != 0) {
         ZF_LOGE("Unable to map larger IPC buffer for SOS itself");
+        return false;
+    }
+
+    // create filetable
+    if(fileman_create(TTY_EP_BADGE)) {
+        ZF_LOGE("Unable to allocate file table.");
         return false;
     }
 
@@ -589,6 +623,9 @@ NORETURN void *main_continued(UNUSED void *arg)
     );
     frame_table_init(&cspace, seL4_CapInitThreadVSpace);
 
+    // GRP01: init OS parts here
+    fileman_init();
+
     /* run sos initialisation tests */
     run_tests(&cspace);
 
@@ -622,6 +659,7 @@ NORETURN void *main_continued(UNUSED void *arg)
 
     printf("\nSOS entering syscall loop\n");
     init_threads(ipc_ep, sched_ctrl_start, sched_ctrl_end);
+    bgworker_init();
     syscall_loop(ipc_ep);
 }
 /*

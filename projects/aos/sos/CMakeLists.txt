@@ -60,8 +60,12 @@ add_executable(
     src/threads.c
     # GRP01: test M01
     src/libclocktest.c
+    # GRP01: M02
+    src/bgworker.c
+    src/fileman.c
+    src/fs/console.c
 )
-target_include_directories(sos PRIVATE "include")
+target_include_directories(sos PRIVATE "include" "../libsosapi/include")
 target_link_libraries(
     sos
     sel4_autoconf

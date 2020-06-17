@@ -16,11 +16,33 @@
 #include <sos.h>
 
 #include <sel4/sel4.h>
+#include <errno.h>
+
+#include "util.h"
+#include "sossysnr.h"
+
+
+#define SYSCALL_ENDPOINT_SLOT 1
 
 int sos_sys_open(const char *path, fmode_t mode)
 {
-    assert(!"You need to implement this");
-    return -1;
+    uint32_t len = strnlen(path, PAGE_SIZE_4K);
+    if(len >= PAGE_SIZE_4K) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+
+    void* bigipc = get_large_ipc_buffer();
+    memcpy(bigipc, path, len);
+
+    seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, 3);
+    seL4_SetMR(0, SOS_SYSCALL_OPEN);
+    seL4_SetMR(1, len);
+    seL4_SetMR(2, mode);
+
+    msginfo = seL4_Call(SYSCALL_ENDPOINT_SLOT, msginfo);
+
+    return seL4_GetMR(0);
 }
 
 int sos_sys_close(int file)

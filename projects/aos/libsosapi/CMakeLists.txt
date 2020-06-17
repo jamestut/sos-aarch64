@@ -23,6 +23,7 @@ add_library(
     src/sys_thread.c
     src/sys_time.c
     src/vsyscall.c
+    src/util.c
 )
 target_include_directories(sosapi PUBLIC include)
 target_link_libraries(sosapi muslc sel4 utils aos)

@@ -70,6 +70,10 @@ int main(void)
     /* initialise communication */
     ttyout_init();
 
+    puts("TTY test = opening console!");
+    int fh = open("console");
+    printf("TTY test = my fh is %d\n", fh);
+
     while(1) {
         test_syscall();
     }
