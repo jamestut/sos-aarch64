@@ -10,6 +10,7 @@
 #include "utils.h"
 #include "fs/console.h"
 #include "bgworker.h"
+#include "ut.h"
 
 #include "fileman.h"
 
@@ -53,6 +54,7 @@ struct bg_open_param {
     const char* filename;
     seL4_Word pid;
     seL4_CPtr reply;
+    ut_t* reply_ut;
     int mode;
 };
 
@@ -113,7 +115,7 @@ int fileman_create(seL4_Word pid)
     return 0;
 }
 
-int fileman_open(seL4_Word pid, seL4_CPtr reply, const char* filename, int mode)
+int fileman_open(seL4_Word pid, seL4_CPtr reply, ut_t* reply_ut, const char* filename, int mode)
 {
     // error checking
     // bad pid
@@ -128,6 +130,7 @@ int fileman_open(seL4_Word pid, seL4_CPtr reply, const char* filename, int mode)
     param->mode = mode;
     param->pid = pid;
     param->reply = reply;
+    param->reply_ut = reply_ut;
 
     bgworker_enqueue_callback(bg_fileman_open, param);
     return 0;
@@ -200,6 +203,9 @@ finish:
     seL4_MessageInfo_t reply_msg = seL4_MessageInfo_new(0, 0, 0, 1);
     seL4_SetMR(0, ret);
     seL4_Send(param->reply, reply_msg);
+    // delete the reply cap for now (and mark the backing ut as free)
+    cspace_delete(&cspace, param->reply);
     cspace_free_slot(&cspace, param->reply);
+    ut_free(param->reply_ut);
     free(param);
 }

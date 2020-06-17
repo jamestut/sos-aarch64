@@ -119,7 +119,7 @@ static struct {
 } tty_test_process;
 
 
-void handle_syscall(UNUSED seL4_Word badge, UNUSED int num_args, seL4_CPtr reply)
+void handle_syscall(UNUSED seL4_Word badge, UNUSED int num_args, seL4_CPtr reply, ut_t* reply_ut)
 {
 
     /* get the first word of the message, which in the SOS protocol is the number
@@ -138,7 +138,7 @@ void handle_syscall(UNUSED seL4_Word badge, UNUSED int num_args, seL4_CPtr reply
         else {
             char * fn = tty_test_process.ipc_buffer_large_ptr;
             fn[seL4_GetMR(1)] = 0;
-            handler_ret = fileman_open(badge, reply, fn, seL4_GetMR(2));
+            handler_ret = fileman_open(badge, reply, reply_ut, fn, seL4_GetMR(2));
         }
         break;
     case 555:
@@ -158,28 +158,29 @@ void handle_syscall(UNUSED seL4_Word badge, UNUSED int num_args, seL4_CPtr reply
         seL4_SetMR(0, handler_ret);
         seL4_Send(reply, reply_msg);
         /* in MCS kernel, reply object is meant to be reused rather than freed */
-        /* Free the slot we allocated for the reply - it is now empty, as the reply
-         * capability was consumed by the send. */
+        // however, for this version, we'll delete them manually to simplify things
+        cspace_delete(&cspace, reply);
         cspace_free_slot(&cspace, reply);
+        ut_free(reply_ut);
     }
 }
 
 NORETURN void syscall_loop(seL4_CPtr ep)
 {
-    seL4_CPtr reply;
+    seL4_CPtr reply = 0;
+    ut_t * reply_ut = NULL;
 
     while (1) {
         /* Create reply object */
         // we'll need to realloc a new reply object, as the old one may take a while
-        // to be replied.
-        // TODO: GRP01 avoid UT leak
-        // TODO: GRP01 do not reallocate if a codepath doesn't use the reply object,
-        //             such as sos_handle_irq_notification
-        ut_t *reply_ut = alloc_retype(&reply, seL4_ReplyObject, seL4_ReplyBits);
-        if (reply_ut == NULL) {
-            ZF_LOGF("Failed to alloc reply object ut");
+        // to be replied and we have to serve new requests.
+        // only reallocate reply object if the previous code path didn't use it
+        if(!reply_ut) {
+            reply_ut = alloc_retype(&reply, seL4_ReplyObject, seL4_ReplyBits);
+            if (reply_ut == NULL) {
+                ZF_LOGF("Failed to alloc reply object ut");
+            }
         }
-        ut_free(reply_ut);
 
         seL4_Word badge = 0;
         /* Block on ep, waiting for an IPC sent over ep, or
@@ -196,7 +197,11 @@ NORETURN void syscall_loop(seL4_CPtr ep)
         } else if (label == seL4_Fault_NullFault) {
             /* It's not a fault or an interrupt, it must be an IPC
              * message from tty_test! */
-            handle_syscall(badge, seL4_MessageInfo_get_length(message) - 1, reply);
+            // pass the reply_ut also so that we can tell ut that the reply object is no
+            // longer used
+            handle_syscall(badge, seL4_MessageInfo_get_length(message) - 1, reply, reply_ut);
+            // indicate to the next loop that we used this reply object
+            reply_ut = NULL;
         } else {
             /* some kind of fault */
             debug_print_fault(message, TTY_NAME);

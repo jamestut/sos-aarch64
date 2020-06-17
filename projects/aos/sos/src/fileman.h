@@ -5,6 +5,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#include "ut.h"
+
 // note: for functions that return negative number when they're failing, please
 //       multiply the result by -1 to get the errno.
 
@@ -37,7 +39,7 @@ void fileman_destroy(seL4_Word pid);
 // open a file handle.
 // @return errno if failed, 0 if pending.
 //         Result will be replied directly to the client once finishes.
-int fileman_open(seL4_Word pid, seL4_CPtr reply, const char* filename, int mode);
+int fileman_open(seL4_Word pid, seL4_CPtr reply, ut_t* reply_ut, const char* filename, int mode);
 
 // @param fh valid file handle for the given pid returned by fileman_open
 void fileman_close(seL4_Word pid, int fh);
