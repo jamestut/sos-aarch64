@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <stdarg.h>
 #include <sos.h>
 
 #include <sel4/sel4.h>
@@ -25,10 +26,13 @@
 #define UINT32_LIMIT 0x7FFFFFFF
 
 int sos_errno = 0;
+char debugstr[4096];
 
 inline int sos_sys_rw(bool read, int file, char *buf, size_t nbyte);
 
 int sos_sys_not_implemented(void);
+
+void sos_debug_printf(const char* str, ...);
 
 int sos_sys_open(const char *path, fmode_t mode)
 {
@@ -112,9 +116,18 @@ pid_t sos_process_wait(pid_t pid)
 }
 
 void sos_sys_usleep(int msec)
-{
-    assert(!"You need to implement this");
-    return -1;
+{   
+    if (msec < 0){
+        // reject the request
+        sos_errno = EINVAL;
+        return -1;
+    }
+
+    seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, 2);
+    seL4_SetMR(0, SOS_SYSCALL_USLEEP);
+    seL4_SetMR(1, msec);
+
+    seL4_Call(SOS_IPC_EP_CAP, msginfo);
 }
 
 int64_t sos_sys_time_stamp(void)
@@ -197,4 +210,16 @@ int sos_sys_not_implemented()
     seL4_Send(SOS_IPC_EP_CAP, msginfo);
     sos_errno = ENOSYS;
     return -1;
+}
+
+void sos_debug_printf(const char* str, ...)
+{
+    va_list args;
+
+    va_start(args, str);
+    int len = vsprintf(debugstr, str, args);
+    va_end(args);
+
+    for(int i=0; i<len; ++i)
+        seL4_DebugPutChar(debugstr[i]);
 }

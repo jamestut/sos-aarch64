@@ -69,7 +69,7 @@
 #define IRQ_EP_BADGE         BIT(seL4_BadgeBits - 1ul)
 #define IRQ_IDENT_BADGE_BITS MASK(seL4_BadgeBits - 1ul)
 
-#define TTY_NAME             "tty_test"
+#define TTY_NAME             "sosh"
 #define TTY_PRIORITY         (0)
 #define TTY_EP_BADGE         (101)
 
@@ -164,9 +164,9 @@ void handle_syscall(seL4_Word badge, UNUSED int num_args, seL4_CPtr reply, ut_t*
                 tty_test_process.ipc_buffer_large_ptr, seL4_GetMR(2));
         break;
 
-    // case SOS_SYSCALL_USLEEP:
-    //     // TODO check the sleep limitaton
-    //     break;
+    case SOS_SYSCALL_USLEEP:
+        handler_ret = ts_usleep(seL4_GetMR(1), reply, reply_ut);
+        break;
     
     case SOS_SYSCALL_TIMESTAMP:
         handler_ret = ts_get_timestamp();
@@ -696,7 +696,7 @@ NORETURN void *main_continued(UNUSED void *arg)
 
     // start anything that have to run separate threads here
     bgworker_init();
-    start_fake_timer();
+    //start_fake_timer();
 
     syscall_loop(ipc_ep);
 }
