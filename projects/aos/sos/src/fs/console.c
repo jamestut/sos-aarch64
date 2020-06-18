@@ -11,23 +11,34 @@
 #include "../utils.h"
 #include "console.h"
 
-#define CIRC_BUFF_SZ 128
+#define TMP_BUFF_SZ 128
+#define TMP_POS_INC(v) ((v+1) % TMP_BUFF_SZ)
 
-#define MTU 960
-
-#define INC_POS(v) ((v+1) % CIRC_BUFF_SZ)
+#define MTU 960U
 #define MAX_SIZE 0x80000000U
 
 // local variable section
 struct serial * serhdl = NULL;
 
 struct {
-    // empty = prod == cons
-    // full  = prod == cons - 1
-    uint16_t prod_pos;
-    uint16_t cons_pos;
-    char data[CIRC_BUFF_SZ];
+    // store read data here if no one is doing read now
+    // only store the latest TMP_BUFF_SZ if full (old evicted)
+    struct {
+        char data[TMP_BUFF_SZ];
+        uint16_t prod_pos;
+        uint16_t cons_pos;
+    } tmp;
+    
+    struct {
+        bool active;
+        uint8_t* ptr;
+        size_t rem;
+        bool stop;
+    } client;
+
+    // lock for this entire structure
     sync_bin_sem_t lock;
+    // to be used by "consumer"
     sync_cv_t cv;
 } readbuff;
 
@@ -56,6 +67,7 @@ void console_fs_close(UNUSED int id) { /* stateless! do nothing! */ }
 // platform specific functions
 #ifdef CONFIG_PLAT_ODROIDC2
 void libserial_handler(struct serial *serial, char c);
+void libserial_handler2(struct serial *serial, char c);
 
 void console_fs_init(void)
 {
@@ -86,27 +98,50 @@ ssize_t console_fs_read(int id, void* ptr, size_t len)
         if(len >= MAX_SIZE)
             len = MAX_SIZE - 1;
 
-        int32_t read = 0;
-        char * target = ptr;
-        bool auxstop = false; //only for newline for now
+        size_t rem = len;
+        uint8_t* tgt = ptr;
 
-        while((read < (int32_t)len) && !auxstop) {
-            sync_bin_sem_wait(&readbuff.lock);
-            // wait until we got something in buffer
-            while(readbuff.cons_pos == readbuff.prod_pos) {
+        sync_bin_sem_wait(&readbuff.lock);
+
+        // copy from temporary buffer first
+        bool auxstop = false;
+        while(rem && (readbuff.tmp.prod_pos != readbuff.tmp.cons_pos) && !auxstop) {
+            if((*(tgt++) = readbuff.tmp.data[readbuff.tmp.cons_pos]) == '\n')
+                auxstop = true;
+            readbuff.tmp.cons_pos = TMP_POS_INC(readbuff.tmp.cons_pos);
+            --rem;
+        }
+
+        ssize_t ret;
+
+        // delegate task to interrupt handler if we have remaining job
+        if(rem && !auxstop) {
+            // wait until it is our turn to write
+            while(readbuff.client.active) {
                 sync_cv_wait(&readbuff.lock, &readbuff.cv);
             }
-            // copy to buffer until we get a newline
-            while((readbuff.cons_pos != readbuff.prod_pos) && (read < (int32_t)len)) {
-                if((target[read++] = readbuff.data[readbuff.cons_pos]) == '\n') {
-                    auxstop = true;
-                    break;
-                }
-                readbuff.cons_pos = INC_POS(readbuff.cons_pos);
+            // our turn!
+            readbuff.client.active = true;
+            readbuff.client.stop = false;
+            readbuff.client.rem = rem;
+            readbuff.client.ptr = tgt;
+            // wait until handler indicate finish
+            while(!readbuff.client.stop) {
+                sync_cv_wait(&readbuff.lock, &readbuff.cv);
             }
-            sync_bin_sem_post(&readbuff.lock);
+            
+            // prepare return value
+            ret = len - readbuff.client.rem;
+            // indicate that we've finished
+            readbuff.client.active = false;
+        } else {
+            ret = len - rem;
         }
-        return read;
+
+        // leave critical section
+        sync_bin_sem_post(&readbuff.lock);
+
+        return ret;
     } else
         // not allowed to read!
         return EBADF * -1;
@@ -120,26 +155,46 @@ ssize_t console_fs_write(int id, void* ptr, size_t len)
         uint8_t * src = ptr;
         while(wr < len) {
             size_t to_write = MIN(MTU, len - wr);
-            ssize_t written = serial_send(serhdl, src, to_write);
+            ssize_t written = serial_send(serhdl, (char*)src, to_write);
             if(written < 0)
                 return EIO * -1;
             wr += written;
             src += written;
         }
+        return wr;
     } else
         return EBADF * -1;
 }
 
 void libserial_handler(UNUSED struct serial *serial, char c)
 {
-    // producer!
     sync_bin_sem_wait(&readbuff.lock);
-    // check if full. if the buffer is full, we will drop the input :(
-    if(INC_POS(readbuff.prod_pos) != readbuff.cons_pos) {
-        readbuff.data[readbuff.prod_pos] = c;
-        readbuff.prod_pos = INC_POS(readbuff.prod_pos);
-        sync_cv_signal(&readbuff.cv);
+
+    // if not active, we'll write to the temporary buffer
+    if(!readbuff.client.active) {
+
+        readbuff.tmp.data[readbuff.tmp.prod_pos] = c;
+        uint16_t nxt_prod_pos = TMP_POS_INC(readbuff.tmp.prod_pos);
+        
+        // enforce FIFO (aka First In First Obliviated!)
+        if(nxt_prod_pos == readbuff.tmp.cons_pos) {
+            readbuff.tmp.cons_pos = TMP_POS_INC(readbuff.tmp.prod_pos);
+        }
+        
+        readbuff.tmp.prod_pos = nxt_prod_pos;
+    } else {
+        // write directly to target
+        if((*(readbuff.client.ptr++) = c) == '\n')
+            readbuff.client.stop = true;
+        if(!--readbuff.client.rem)
+            readbuff.client.stop = true;
+        
+        // wake up the consumer if needed!
+        if(readbuff.client.stop) {
+            sync_cv_signal(&readbuff.cv);
+        }
     }
+
     sync_bin_sem_post(&readbuff.lock);
 }
 

@@ -74,6 +74,7 @@ int main(void)
 
     /* initialise communication */
     ttyout_init();
+
     puts("TTY test = starting console test!");
 
     int rs;
@@ -84,13 +85,18 @@ int main(void)
 
     // test write large
     int fh1 = open("console", O_RDWR);
-    printf("fh1 = %d\n", fh1);
-    printf("writing %d bytes\n", sizeof(mymem));
-    rs = write(fh1, mymem, sizeof(mymem));
-    printf("write result = %d\n", rs);
+    //printf("fh1 = %d\n", fh1);
+    //printf("writing %d bytes\n", sizeof(mymem));
+    //rs = write(fh1, mymem, sizeof(mymem));
+    //printf("write result = %d\n", rs);
     
     puts("Test read");
     while(1) {
+        // write(fh1, "Delaying. Type something @ console.\n", 36);
+        // volatile uint64_t a;
+        // for(int i=0; i<1000*1000*1000; ++i) { ++a; }
+
+        write(fh1, "Write something: ", 17);
         int rd = read(fh1, mymem, sizeof(mymem));
         printf("Read %d bytes\n", rd);
         mymem[rd] = 0;

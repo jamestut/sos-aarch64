@@ -172,7 +172,7 @@ int sos_sys_rw(bool read, int file, char *buf, size_t nbyte)
             rd += ret;
             // if SOS indicated that it does less than we want, we reached EOF.
             // stop now!
-            if(rd < numrd)
+            if(ret < numrd)
                 break;
         }
     }
