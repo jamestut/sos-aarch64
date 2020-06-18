@@ -120,13 +120,25 @@ pid_t sos_process_wait(pid_t pid)
 
 void sos_sys_usleep(int msec)
 {
-    assert(!"You need to implement this");
+    // if (msec < 0){
+    //     // reject the request
+    // }
+    // seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, 2);
+    // seL4_SetMR(0, SOS_SYSCALL_USLEEP);
+    // seL4_SetMR(1, msec);
+
+    // msginfo = seL4_Call(SOS_IPC_EP_CAP, msginfo);
 }
 
 int64_t sos_sys_time_stamp(void)
 {
-    assert(!"You need to implement this");
-    return -1;
+    seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, 1);
+    seL4_SetMR(0, SOS_SYSCALL_TIMESTAMP);
+
+    msginfo = seL4_Call(SOS_IPC_EP_CAP, msginfo);   
+
+    // get the reply
+    return seL4_GetMR(0);
 }
 
 int sos_sys_rw(bool read, int file, char *buf, size_t nbyte)

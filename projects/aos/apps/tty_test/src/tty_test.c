@@ -30,6 +30,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
+#include <time.h>
 
 #include <sos.h>
 
@@ -77,6 +78,19 @@ int main(void)
 
     puts("TTY test = starting console test!");
 
+    /* start testing timestamp */
+    puts("TTY test = starting timestamp test!");
+    
+    printf("Timestamp: %d\n",(int)time(NULL));
+    
+    for (int i =0 ; i < 1000* 1000 * 1000 ; i++){
+        // busy waiting
+    }
+    printf("New Timestamp: %d\n",(int)time(NULL));
+    
+    // do nothing :)
+    while(1){}
+
     int rs;
 
     // initialize data for large writing
@@ -107,6 +121,8 @@ int main(void)
 
     // stop here and busy wait
     puts("Finished testing. Doing nothing :)");
+
+
     while(1) {}
 
     return 0;
