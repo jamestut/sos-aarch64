@@ -28,6 +28,8 @@ int sos_errno = 0;
 
 inline int sos_sys_rw(bool read, int file, char *buf, size_t nbyte);
 
+int sos_sys_not_implemented(void);
+
 int sos_sys_open(const char *path, fmode_t mode)
 {
     uint32_t len = strnlen(path, MAX_IO_BUF);
@@ -76,45 +78,37 @@ int sos_sys_write(int file, const char *buf, size_t nbyte)
 
 int sos_getdirent(int pos, char *name, size_t nbyte)
 {
-    assert(!"You need to implement this");
-    return -1;
+    return sos_sys_not_implemented();
 }
 
 int sos_stat(const char *path, sos_stat_t *buf)
 {
-    assert(!"You need to implement this");
-    return -1;
+    return sos_sys_not_implemented();
 }
 
 pid_t sos_process_create(const char *path)
 {
-    assert(!"You need to implement this");
-    return -1;
+    return sos_sys_not_implemented();
 }
 
 int sos_process_delete(pid_t pid)
 {
-    assert(!"You need to implement this");
-    return -1;
+    return sos_sys_not_implemented();
 }
 
 pid_t sos_my_id(void)
 {
-    assert(!"You need to implement this");
-    return -1;
-
+    return sos_sys_not_implemented();
 }
 
 int sos_process_status(sos_process_t *processes, unsigned max)
 {
-    assert(!"You need to implement this");
-    return -1;
+    return sos_sys_not_implemented();
 }
 
 pid_t sos_process_wait(pid_t pid)
 {
-    assert(!"You need to implement this");
-    return -1;
+    return sos_sys_not_implemented();
 }
 
 void sos_sys_usleep(int msec)
@@ -194,4 +188,13 @@ int sos_sys_rw(bool read, int file, char *buf, size_t nbyte)
 void* sos_large_ipc_buffer(void)
 {
     return (void*)((uintptr_t)seL4_GetIPCBuffer() + MAX_IO_BUF);
+}
+
+int sos_sys_not_implemented()
+{
+    seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, 1);
+    seL4_SetMR(0, SOS_SYSCALL_UNIMPLEMENTED);
+    seL4_Send(SOS_IPC_EP_CAP, msginfo);
+    sos_errno = ENOSYS;
+    return -1;
 }

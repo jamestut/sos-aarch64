@@ -64,6 +64,7 @@ add_executable(
     # GRP01: M02
     src/bgworker.c
     src/fileman.c
+    src/fs/nullfile.c
     src/fs/console.c
     src/fs/fakeconsole.c
     src/timesyscall.c

@@ -171,6 +171,12 @@ void handle_syscall(seL4_Word badge, UNUSED int num_args, seL4_CPtr reply, ut_t*
     case SOS_SYSCALL_TIMESTAMP:
         handler_ret = ts_get_timestamp();
         break;
+
+    case SOS_SYSCALL_UNIMPLEMENTED:
+        // just print this message as specified :)
+        puts("system call not implemented");
+        handler_ret = 1;
+        break;
         
     default:
         ZF_LOGE("Unknown syscall %lu\n", syscall_number);

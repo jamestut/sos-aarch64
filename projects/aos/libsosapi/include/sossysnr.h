@@ -1,5 +1,7 @@
 #pragma once
 
+#define SOS_SYSCALL_UNIMPLEMENTED 0x7FFFFFFF
+
 #define SOS_SYSCALL_READ  0
 #define SOS_SYSCALL_WRITE 1
 #define SOS_SYSCALL_OPEN  2

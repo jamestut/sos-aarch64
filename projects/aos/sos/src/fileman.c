@@ -9,6 +9,7 @@
 
 #include "utils.h"
 #include "fs/console.h"
+#include "fs/nullfile.h"
 #include "bgworker.h"
 #include "ut.h"
 
@@ -48,6 +49,8 @@ struct {
     const char* name;
     struct filehandler handler;
 } specialhandlers[SPECIAL_HANDLERS];
+
+struct filehandler nullhandler;
 
 // structs specific for arguments to bgworker
 struct bg_open_param {
@@ -92,6 +95,11 @@ bool fileman_init()
 {
     memset(ft, 0, sizeof(ft));
 
+    nullhandler.open = null_fs_open;
+    nullhandler.close = null_fs_close;
+    nullhandler.read = null_fs_read;
+    nullhandler.write = null_fs_write;
+
     // install special handlers (console)
     specialhandlers[0].name = "console";
     specialhandlers[0].handler.open = console_fs_open;
@@ -125,9 +133,11 @@ int fileman_create(seL4_Word pid)
     // empty the file table
     memset(ft[pid].fe, 0, sizeof(ft[pid].fe));
 
-    // by default, stdin/out/err is used
-    for(int i=0; i<=2; ++i)
+    // by default, stdin/out/err is reserved!
+    for(int i=0; i<=2; ++i) {
         ft[pid].fe[i].used = true;
+        ft[pid].fe[i].handler = &nullhandler;
+    }
     
     // set the flag to indicate that someone is using this PID
     ft[pid].used = true;
