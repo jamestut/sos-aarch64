@@ -115,18 +115,29 @@ pid_t sos_process_wait(pid_t pid)
 {
     assert(!"You need to implement this");
     return -1;
-
 }
 
 void sos_sys_usleep(int msec)
 {
     assert(!"You need to implement this");
+    return -1;
 }
 
 int64_t sos_sys_time_stamp(void)
 {
-    assert(!"You need to implement this");
-    return -1;
+    seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, 1);
+    seL4_SetMR(0, SOS_SYSCALL_TIMESTAMP);
+
+    msginfo = seL4_Call(SOS_IPC_EP_CAP, msginfo);   
+
+    // get the reply
+    ssize_t ret = seL4_GetMR(0);
+    if(ret < 0) {
+        sos_errno = ret * -1;
+        return -1;
+    } else {
+        return ret;
+    }
 }
 
 int sos_sys_rw(bool read, int file, char *buf, size_t nbyte)

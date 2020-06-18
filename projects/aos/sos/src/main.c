@@ -53,6 +53,7 @@
 #include "fs/console.h"
 #include "fileman.h"
 #include "bgworker.h"
+#include "timesyscall.h"
 
 #include <aos/vsyscall.h>
 
@@ -162,6 +163,15 @@ void handle_syscall(seL4_Word badge, UNUSED int num_args, seL4_CPtr reply, ut_t*
             handler_ret = fileman_write(badge, seL4_GetMR(1), reply, reply_ut, 
                 tty_test_process.ipc_buffer_large_ptr, seL4_GetMR(2));
         break;
+
+    // case SOS_SYSCALL_USLEEP:
+    //     // TODO check the sleep limitaton
+    //     break;
+    
+    case SOS_SYSCALL_TIMESTAMP:
+        handler_ret = ts_get_timestamp();
+        break;
+        
     default:
         ZF_LOGE("Unknown syscall %lu\n", syscall_number);
     }
