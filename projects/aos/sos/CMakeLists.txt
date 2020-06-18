@@ -60,6 +60,7 @@ add_executable(
     src/threads.c
     # GRP01: test M01
     src/libclocktest.c
+    src/fakes/timer.c
     # GRP01: M02
     src/bgworker.c
     src/fileman.c
