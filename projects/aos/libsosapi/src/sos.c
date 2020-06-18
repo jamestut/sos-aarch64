@@ -115,19 +115,33 @@ pid_t sos_process_wait(pid_t pid)
 {
     assert(!"You need to implement this");
     return -1;
-
 }
 
 void sos_sys_usleep(int msec)
-{
-    // if (msec < 0){
-    //     // reject the request
-    // }
-    // seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, 2);
-    // seL4_SetMR(0, SOS_SYSCALL_USLEEP);
-    // seL4_SetMR(1, msec);
+{   
+    // TODO range ?
+    if (msec < 0){
+        // reject the request
+        sos_errno = EINVAL;
+        return -1;
+        
+    }
 
-    // msginfo = seL4_Call(SOS_IPC_EP_CAP, msginfo);
+    seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, 2);
+    seL4_SetMR(0, SOS_SYSCALL_USLEEP);
+    seL4_SetMR(1, msec);
+
+    msginfo = seL4_Call(SOS_IPC_EP_CAP, msginfo);
+
+    ssize_t ret = seL4_GetMR(0);
+    printf("Get the reply with number: %ll", ret);
+    if(ret < 0) {
+        sos_errno = ret * -1;
+        return -1;
+    } else{
+        return ret;
+    }
+
 }
 
 int64_t sos_sys_time_stamp(void)
@@ -138,7 +152,13 @@ int64_t sos_sys_time_stamp(void)
     msginfo = seL4_Call(SOS_IPC_EP_CAP, msginfo);   
 
     // get the reply
-    return seL4_GetMR(0);
+    ssize_t ret = seL4_GetMR(0);
+    if(ret < 0) {
+        sos_errno = ret * -1;
+        return -1;
+    } else {
+        return ret;
+    }
 }
 
 int sos_sys_rw(bool read, int file, char *buf, size_t nbyte)

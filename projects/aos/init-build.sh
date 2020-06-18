@@ -39,7 +39,9 @@ fi
 # Initialize cmake
 cmake \
 	-DAARCH64=TRUE \
-	-DCMAKE_TOOLCHAIN_FILE=${SCRIPT_PATH}/kernel/gcc.cmake \
+    # -DPLATFORM=qemu-arm-virt \
+	-DPLATFORM=odroidc2 \
+    -DCMAKE_TOOLCHAIN_FILE=${SCRIPT_PATH}/kernel/gcc.cmake \
 	-G Ninja \
 	$@ \
 	${SCRIPT_PATH}

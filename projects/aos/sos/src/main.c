@@ -48,7 +48,7 @@
 
 // GRP01: for testing M01
 #include "libclocktest.h"
-
+#include "fakes/timer.h"
 // GRP01: M2
 #include "fs/console.h"
 #include "fileman.h"
@@ -165,7 +165,7 @@ void handle_syscall(seL4_Word badge, UNUSED int num_args, seL4_CPtr reply, ut_t*
         break;
 
     case SOS_SYSCALL_USLEEP:
-        // TODO check the sleep limitaton
+        handler_ret = ts_usleep(seL4_GetMR(1),reply,reply_ut);
         break;
     
     case SOS_SYSCALL_TIMESTAMP:
@@ -687,7 +687,11 @@ NORETURN void *main_continued(UNUSED void *arg)
 
     printf("\nSOS entering syscall loop\n");
     init_threads(ipc_ep, sched_ctrl_start, sched_ctrl_end);
+
+    // start anything that have to run separate threads here
     bgworker_init();
+    start_fake_timer();
+
     syscall_loop(ipc_ep);
 }
 /*

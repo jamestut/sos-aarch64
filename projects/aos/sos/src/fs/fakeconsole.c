@@ -14,7 +14,7 @@ void console_fs_init(void)
     ZF_LOGI("fake console initialized.");
 }
 
-int32_t console_fs_read(int id, void* ptr, uint32_t len)
+int32_t console_fs_read(int id, void* ptr, size_t len)
 {
     const char* dummy = "hello";
     char* target = ptr;
@@ -28,7 +28,7 @@ int32_t console_fs_read(int id, void* ptr, uint32_t len)
     return to_copy;
 }
 
-int32_t console_fs_write(int id, void* ptr, uint32_t len)
+int32_t console_fs_write(int id, void* ptr, size_t len)
 {
     // print to tty :)
     char* cptr = ptr;

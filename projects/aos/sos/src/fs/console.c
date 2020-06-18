@@ -11,7 +11,7 @@
 #include "../utils.h"
 #include "console.h"
 
-#define TMP_BUFF_SZ 128
+#define TMP_BUFF_SZ 4096 // in line with libserial
 #define TMP_POS_INC(v) ((v+1) % TMP_BUFF_SZ)
 
 #define MTU 960U
@@ -67,7 +67,6 @@ void console_fs_close(UNUSED int id) { /* stateless! do nothing! */ }
 // platform specific functions
 #ifdef CONFIG_PLAT_ODROIDC2
 void libserial_handler(struct serial *serial, char c);
-void libserial_handler2(struct serial *serial, char c);
 
 void console_fs_init(void)
 {
@@ -169,20 +168,8 @@ ssize_t console_fs_write(int id, void* ptr, size_t len)
 void libserial_handler(UNUSED struct serial *serial, char c)
 {
     sync_bin_sem_wait(&readbuff.lock);
-
-    // if not active, we'll write to the temporary buffer
-    if(!readbuff.client.active) {
-
-        readbuff.tmp.data[readbuff.tmp.prod_pos] = c;
-        uint16_t nxt_prod_pos = TMP_POS_INC(readbuff.tmp.prod_pos);
-        
-        // enforce FIFO (aka First In First Obliviated!)
-        if(nxt_prod_pos == readbuff.tmp.cons_pos) {
-            readbuff.tmp.cons_pos = TMP_POS_INC(readbuff.tmp.prod_pos);
-        }
-        
-        readbuff.tmp.prod_pos = nxt_prod_pos;
-    } else {
+    
+    if(readbuff.client.active && !readbuff.client.stop) {
         // write directly to target
         if((*(readbuff.client.ptr++) = c) == '\n')
             readbuff.client.stop = true;
@@ -193,6 +180,16 @@ void libserial_handler(UNUSED struct serial *serial, char c)
         if(readbuff.client.stop) {
             sync_cv_signal(&readbuff.cv);
         }
+    } else {
+        // if not active, we'll write to the temporary buffer
+        readbuff.tmp.data[readbuff.tmp.prod_pos] = c;
+        uint16_t nxt_prod_pos = TMP_POS_INC(readbuff.tmp.prod_pos);
+        
+        // enforce FIFO (aka First In First Obliviated!)
+        if(nxt_prod_pos == readbuff.tmp.cons_pos) 
+            readbuff.tmp.cons_pos = TMP_POS_INC(readbuff.tmp.cons_pos);
+        
+        readbuff.tmp.prod_pos = nxt_prod_pos;
     }
 
     sync_bin_sem_post(&readbuff.lock);

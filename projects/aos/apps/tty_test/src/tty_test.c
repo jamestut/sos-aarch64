@@ -40,6 +40,8 @@
 
 char mymem[40000];
 
+extern int sos_errno;
+
 // Block a thread forever
 // we do this by making an unimplemented system call.
 static void thread_block(void)
@@ -79,14 +81,34 @@ int main(void)
     puts("TTY test = starting console test!");
 
     /* start testing timestamp */
-    puts("TTY test = starting timestamp test!");
+    // puts("TTY test = starting timestamp test!");
     
-    printf("Timestamp: %d\n",(int)time(NULL));
+    // while(1) {
+    //     printf("time(): %d\n",(int)time(NULL));
+    //     printf("time(): %lld\n",sos_sys_time_stamp());
+    //     for (volatile int i =0 ; i < 500 * 1000 * 1000 ; i++){}
+    // }
+
+    puts("TTY test = starting sleeping syscall test!");
+
+    // testing 5 sec sleep
+    puts("testing sleep(5)");
+    printf("Before Sleep Timestamp: %d\n",(int)time(NULL));
+    sleep(5);
+    printf("After Sleep Timestamp: %d\n",(int)time(NULL));
     
-    for (int i =0 ; i < 1000* 1000 * 1000 ; i++){
-        // busy waiting
+    // testing invalid args
+    puts("testing invalid sleep(-1)");
+    sleep(-1);
+    printf("err with no: %d\n", sos_errno);
+
+
+    puts("Periodically calling sleep(3).");
+    for (int i = 0 ; i < 10 ; i++){
+        printf("Before Sleep Timestamp: %d\n",(int)time(NULL));
+        sleep(3);
+        printf("New Timestamp: %d\n",(int)time(NULL));
     }
-    printf("New Timestamp: %d\n",(int)time(NULL));
     
     // do nothing :)
     while(1){}
