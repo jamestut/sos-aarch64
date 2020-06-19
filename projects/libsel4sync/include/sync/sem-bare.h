@@ -23,7 +23,7 @@
 #include <limits.h>
 #include <sel4/sel4.h>
 #include <stddef.h>
-#include <platsupport/sync/atomic.h>
+#include "atomic.h"
 
 static inline int sync_sem_bare_wait(seL4_CPtr ep, volatile int *value)
 {

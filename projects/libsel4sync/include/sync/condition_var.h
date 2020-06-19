@@ -14,7 +14,6 @@
 
 #include <autoconf.h>
 #include <sel4/sel4.h>
-#include <platsupport/sync/atomic.h>
 #include <stdbool.h>
 
 typedef struct {

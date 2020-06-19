@@ -16,6 +16,8 @@
 #include <assert.h>
 #include <string.h>
 
+#include <errno.h>
+
 #include <cspace/cspace.h>
 #include <aos/sel4_zf_logif.h>
 #include <aos/debug.h>
@@ -27,6 +29,8 @@
 
 #include <sel4runtime.h>
 #include <sel4runtime/auxv.h>
+
+#include <sossysnr.h>
 
 #include "bootstrap.h"
 #include "irq.h"
@@ -42,8 +46,14 @@
 #include "utils.h"
 #include "threads.h"
 
-// GRP01: for testing M01
+// GRP01: M1
 #include "libclocktest.h"
+#include "fakes/timer.h"
+// GRP01: M2
+#include "fs/console.h"
+#include "fileman.h"
+#include "bgworker.h"
+#include "timesyscall.h"
 
 #include <aos/vsyscall.h>
 
@@ -59,7 +69,7 @@
 #define IRQ_EP_BADGE         BIT(seL4_BadgeBits - 1ul)
 #define IRQ_IDENT_BADGE_BITS MASK(seL4_BadgeBits - 1ul)
 
-#define TTY_NAME             "tty_test"
+#define TTY_NAME             "sosh"
 #define TTY_PRIORITY         (0)
 #define TTY_EP_BADGE         (101)
 
@@ -96,6 +106,11 @@ static struct {
     ut_t *ipc_buffer_ut;
     seL4_CPtr ipc_buffer;
 
+    ut_t *ipc_buffer_large_ut;
+    seL4_CPtr ipc_buffer_large;
+    seL4_CPtr ipc_buffer_large_local;
+    void* ipc_buffer_large_ptr;
+
     ut_t *sched_context_ut;
     seL4_CPtr sched_context;
 
@@ -106,45 +121,98 @@ static struct {
 } tty_test_process;
 
 
-void handle_syscall(UNUSED seL4_Word badge, UNUSED int num_args, seL4_CPtr reply)
+void handle_syscall(seL4_Word badge, UNUSED int num_args, seL4_CPtr reply, ut_t* reply_ut)
 {
 
     /* get the first word of the message, which in the SOS protocol is the number
      * of the SOS "syscall". */
     seL4_Word syscall_number = seL4_GetMR(0);
 
+    // store whatever the handler returns, and pass to app if non zero.
+    seL4_Word handler_ret = ENOSYS;
+
     /* Process system call */
     switch (syscall_number) {
-    case SOS_SYSCALL0:
-        ZF_LOGV("syscall: thread example made syscall 0!\n");
-        /* construct a reply message of length 1 */
-        seL4_MessageInfo_t reply_msg = seL4_MessageInfo_new(0, 0, 0, 1);
-        /* Set the first (and only) word in the message to 0 */
-        seL4_SetMR(0, 0);
-        /* Send the reply to the saved reply capability. */
-        seL4_Send(reply, reply_msg);
-        /* in MCS kernel, reply object is meant to be reused rather than freed */
-        /* Free the slot we allocated for the reply - it is now empty, as the reply
-         * capability was consumed by the send. */
-        cspace_free_slot(&cspace, reply);
+    case SOS_SYSCALL_OPEN:
+        // hard limit for string values
+        if(seL4_GetMR(1) >= PAGE_SIZE_4K)
+            handler_ret = ENAMETOOLONG * -1;
+        else {
+            char * fn = tty_test_process.ipc_buffer_large_ptr;
+            fn[seL4_GetMR(1)] = 0;
+            handler_ret = fileman_open(badge, reply, reply_ut, fn, seL4_GetMR(2));
+        }
+        break;
+    
+    case SOS_SYSCALL_CLOSE:
+        handler_ret = fileman_close(badge, reply, reply_ut, seL4_GetMR(1));
+        break;
+    
+    case SOS_SYSCALL_READ:
+        if(seL4_GetMR(1) >= PAGE_SIZE_4K)
+            handler_ret = EMSGSIZE * -1;
+        else
+            handler_ret = fileman_read(badge, seL4_GetMR(1), reply, reply_ut, 
+                tty_test_process.ipc_buffer_large_ptr, seL4_GetMR(2));
         break;
 
+    case SOS_SYSCALL_WRITE:
+        if(seL4_GetMR(1) >= PAGE_SIZE_4K)
+            handler_ret = EMSGSIZE * -1;
+        else 
+            handler_ret = fileman_write(badge, seL4_GetMR(1), reply, reply_ut, 
+                tty_test_process.ipc_buffer_large_ptr, seL4_GetMR(2));
+        break;
+
+    case SOS_SYSCALL_USLEEP:
+        handler_ret = ts_usleep(seL4_GetMR(1), reply, reply_ut);
+        break;
+    
+    case SOS_SYSCALL_TIMESTAMP:
+        handler_ret = ts_get_timestamp();
+        break;
+
+    case SOS_SYSCALL_UNIMPLEMENTED:
+        // just print this message as specified :)
+        puts("system call not implemented");
+        handler_ret = 1;
+        break;
+        
     default:
         ZF_LOGE("Unknown syscall %lu\n", syscall_number);
-        /* don't reply to an unknown syscall */
+    }
+
+    // reply if handler_ret is not 0. otherwise, we assume that the handler will
+    // reply at some later point
+    if(handler_ret) {
+        seL4_MessageInfo_t reply_msg = seL4_MessageInfo_new(0, 0, 0, 1);
+        seL4_SetMR(0, handler_ret);
+        seL4_Send(reply, reply_msg);
+        /* in MCS kernel, reply object is meant to be reused rather than freed */
+        // however, for this version, we'll delete them manually to simplify things
+        cspace_delete(&cspace, reply);
+        cspace_free_slot(&cspace, reply);
+        ut_free(reply_ut);
     }
 }
 
 NORETURN void syscall_loop(seL4_CPtr ep)
 {
-    seL4_CPtr reply;
-    /* Create reply object */
-    ut_t *reply_ut = alloc_retype(&reply, seL4_ReplyObject, seL4_ReplyBits);
-    if (reply_ut == NULL) {
-        ZF_LOGF("Failed to alloc reply object ut");
-    }
+    seL4_CPtr reply = 0;
+    ut_t * reply_ut = NULL;
 
     while (1) {
+        /* Create reply object */
+        // we'll need to realloc a new reply object, as the old one may take a while
+        // to be replied and we have to serve new requests.
+        // only reallocate reply object if the previous code path didn't use it
+        if(!reply_ut) {
+            reply_ut = alloc_retype(&reply, seL4_ReplyObject, seL4_ReplyBits);
+            if (reply_ut == NULL) {
+                ZF_LOGF("Failed to alloc reply object ut");
+            }
+        }
+
         seL4_Word badge = 0;
         /* Block on ep, waiting for an IPC sent over ep, or
          * a notification from our bound notification object */
@@ -160,7 +228,11 @@ NORETURN void syscall_loop(seL4_CPtr ep)
         } else if (label == seL4_Fault_NullFault) {
             /* It's not a fault or an interrupt, it must be an IPC
              * message from tty_test! */
-            handle_syscall(badge, seL4_MessageInfo_get_length(message) - 1, reply);
+            // pass the reply_ut also so that we can tell ut that the reply object is no
+            // longer used
+            handle_syscall(badge, seL4_MessageInfo_get_length(message) - 1, reply, reply_ut);
+            // indicate to the next loop that we used this reply object
+            reply_ut = NULL;
         } else {
             /* some kind of fault */
             debug_print_fault(message, TTY_NAME);
@@ -359,6 +431,24 @@ bool start_first_process(char *app_name, seL4_CPtr ep)
         ZF_LOGE("Failed to alloc ipc buffer ut");
         return false;
     }
+    // create 2nd IPC buffer for passing large data
+    tty_test_process.ipc_buffer_large_ut = alloc_retype(&tty_test_process.ipc_buffer_large, seL4_ARM_SmallPageObject,
+        seL4_PageBits);
+    if (tty_test_process.ipc_buffer_large_ut == NULL) {
+        ZF_LOGE("Failed to alloc large ipc buffer ut");
+        return false;
+    }
+    // create another copy of this buffer, so that we can map it for ourself!
+    tty_test_process.ipc_buffer_large_local = cspace_alloc_slot(&cspace);
+    if(tty_test_process.ipc_buffer_large_local == seL4_CapNull) {
+        ZF_LOGE("Failed to allocate the 2nd large ipc frame cspace slot");
+        return false;
+    }
+    err = cspace_copy(&cspace, tty_test_process.ipc_buffer_large_local, &cspace, tty_test_process.ipc_buffer_large, seL4_AllRights);
+    if(err != 0) {
+        ZF_LOGE("Failed to copy large ipc frame capability");
+        return false;
+    }
 
     /* allocate a new slot in the target cspace which we will mint a badged endpoint cap into --
      * the badge is used to identify the process, which will come in handy when you have multiple
@@ -456,6 +546,29 @@ bool start_first_process(char *app_name, seL4_CPtr ep)
         return false;
     }
 
+    // extra page for large data that has to be passed thru IPC
+    err = map_frame(&cspace, tty_test_process.ipc_buffer_large, tty_test_process.vspace, PROCESS_IPC_BUFFER + PAGE_SIZE_4K,
+                    seL4_AllRights, seL4_ARM_Default_VMAttributes);
+    if (err != 0) {
+        ZF_LOGE("Unable to map larger IPC buffer for user app");
+        return false;
+    }
+    // also map it to ourself!
+    // TODO: GRP01 do not hardcode the value like this for the next milestones!
+    tty_test_process.ipc_buffer_large_ptr = (void*)(SOS_IPC_BUFFER + PAGE_SIZE_4K);
+    err = map_frame(&cspace, tty_test_process.ipc_buffer_large_local, seL4_CapInitThreadVSpace,
+        (seL4_Word)tty_test_process.ipc_buffer_large_ptr, seL4_AllRights, seL4_ARM_Default_VMAttributes);
+    if (err != 0) {
+        ZF_LOGE("Unable to map larger IPC buffer for SOS itself");
+        return false;
+    }
+
+    // create filetable
+    if(fileman_create(TTY_EP_BADGE)) {
+        ZF_LOGE("Unable to allocate file table.");
+        return false;
+    }
+
     /* Start the new process */
     seL4_UserContext context = {
         .pc = elf_getEntryPoint(&elf_file),
@@ -544,6 +657,9 @@ NORETURN void *main_continued(UNUSED void *arg)
     );
     frame_table_init(&cspace, seL4_CapInitThreadVSpace);
 
+    // GRP01: init OS parts here
+    fileman_init();
+
     /* run sos initialisation tests */
     run_tests(&cspace);
 
@@ -555,8 +671,8 @@ NORETURN void *main_continued(UNUSED void *arg)
     /* Initialise the network hardware. (meson ethernet for now) */
     #ifdef CONFIG_PLAT_ODROIDC2
     // TODO: reenable ethernet (this is disabled to make debugging quicker)
-    // printf("Network init\n");
-    // network_init(&cspace, timer_vaddr, ntfn);
+    printf("Network init\n");
+    network_init(&cspace, timer_vaddr, ntfn);
     #endif
 
     /* Initialises the timer */
@@ -565,10 +681,8 @@ NORETURN void *main_continued(UNUSED void *arg)
     /* You will need to register an IRQ handler for the timer here.
      * See "irq.h". */
 
-    // GRP01: for testing M01
-    libclocktest_begin();
-    // we expect this to do nothing for non odroidc2
-    libclocktest_manual_action();
+    // init file systems
+    console_fs_init();
 
     /* Start the user application */
     printf("Start first process\n");
@@ -577,6 +691,11 @@ NORETURN void *main_continued(UNUSED void *arg)
 
     printf("\nSOS entering syscall loop\n");
     init_threads(ipc_ep, sched_ctrl_start, sched_ctrl_end);
+
+    // start anything that have to run separate threads here
+    bgworker_init();
+    //start_fake_timer();
+
     syscall_loop(ipc_ep);
 }
 /*
