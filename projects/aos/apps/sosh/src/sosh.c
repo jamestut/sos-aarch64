@@ -31,6 +31,7 @@
 #define MAX_ARGS   32
 
 static int in;
+static int fout = -1;
 static sos_stat_t sbuf;
 
 static size_t sos_debug_print(const void *vData, size_t count)
@@ -45,15 +46,22 @@ static size_t sos_debug_print(const void *vData, size_t count)
     return count;
 }
 
+// QUESTION: should we use this debug_print, or libserial?
+// Jarrod: (lib)serial, so we comment out this code that prints to tty!
+// size_t sos_write(void *vData, size_t count)
+// {
+//     // use the content of tty test for this
+//     return sos_debug_print(vData, count);
+// }
 
 size_t sos_write(void *vData, size_t count)
 {
-    // use the content of tty test for this
-    return sos_debug_print(vData, count);
+    return sos_sys_write(fout, vData, count);
 }
 
 size_t sos_read(void *vData, size_t count)
 {
+    // GRP01: this is unused!
     // use the content of tty test
     return 0;
 }
@@ -329,6 +337,11 @@ int main(void)
 
     in = open("console", O_RDONLY);
     assert(in >= 0);
+    // QUESTION: should we print to libserial or tty?
+    // Jarrod: to (lib)serial!
+    fout = open("console", O_WRONLY);
+    assert(fout >= 0);
+
 
     bp = buf;
     done = 0;
