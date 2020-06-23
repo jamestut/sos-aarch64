@@ -46,6 +46,8 @@
 #include "utils.h"
 #include "threads.h"
 
+#include "grp01/dynaarray.h"
+
 // GRP01: M1
 #include "libclocktest.h"
 #include "fakes/timer.h"
@@ -56,6 +58,7 @@
 #include "timesyscall.h"
 // GRP01: M3
 #include "vm/mapping2.h"
+#include "vm/addrspace.h"
 
 #include <aos/vsyscall.h>
 
@@ -120,6 +123,8 @@ static struct {
 
     ut_t *stack_ut;
     seL4_CPtr stack;
+
+    dynarray_t as;
 } tty_test_process;
 
 
@@ -537,7 +542,9 @@ bool start_first_process(char *app_name, seL4_CPtr ep)
     seL4_Word sp = init_process_stack(&cspace, seL4_CapInitThreadVSpace, &elf_file);
 
     /* load the elf image from the cpio file */
-    err = elf_load(&cspace, tty_test_process.vspace, &elf_file);
+    // also pass the address space region dynamic array
+    dynarray_init(&tty_test_process.as, sizeof(addrspace_t));
+    err = elf_load(&cspace, tty_test_process.vspace, &elf_file, &tty_test_process.as);
     if (err) {
         ZF_LOGE("Failed to load elf image");
         return false;

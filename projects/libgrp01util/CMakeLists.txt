@@ -11,4 +11,4 @@ target_include_directories(grp01util
     PUBLIC
         include
 )
-target_link_libraries(grp01util muslc sel4_autoconf)
+target_link_libraries(grp01util muslc utils sel4_autoconf)

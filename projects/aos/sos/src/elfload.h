@@ -15,5 +15,6 @@
 #include <cspace/cspace.h>
 #include <elf/elf.h>
 #include <elf.h>
+#include <grp01/dynaarray.h>
 
-int elf_load(cspace_t *cspace, seL4_CPtr loadee_vspace, elf_t *elf_file);
+int elf_load(cspace_t *cspace, seL4_CPtr loadee_vspace, elf_t *elf_file, dynarray_t* as);

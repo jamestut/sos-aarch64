@@ -70,6 +70,7 @@ add_executable(
     src/timesyscall.c
     # GRP01: M3
     src/vm/mapping2.c
+    src/vm/addrspace.c
 )
 target_include_directories(sos PRIVATE "include" "../libsosapi/include")
 target_link_libraries(

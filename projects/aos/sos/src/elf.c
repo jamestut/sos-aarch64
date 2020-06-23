@@ -19,8 +19,10 @@
 
 #include "frame_table.h"
 #include "ut.h"
-#include "mapping.h"
 #include "elfload.h"
+#include "vm/mapping2.h"
+
+#include "vm/addrspace.h"
 
 /*
  * Convert ELF permissions into seL4 permissions.
@@ -90,6 +92,7 @@ static int load_segment_into_vspace(cspace_t *cspace, seL4_CPtr loadee, char *sr
         }
 
         /* allocate the untyped for the loadees address space */
+        // TODO: GRP01 bookkeep this frame
         frame_ref_t frame = alloc_frame();
         if (frame == NULL_FRAME) {
             ZF_LOGD("Failed to alloc frame");
@@ -104,7 +107,7 @@ static int load_segment_into_vspace(cspace_t *cspace, seL4_CPtr loadee, char *sr
         }
 
         /* map the frame into the loadee address space */
-        err = map_frame(cspace, loadee_frame, loadee, loadee_vaddr, permissions,
+        err = grp01_map_frame(loadee_frame, loadee, loadee_vaddr, permissions,
                         seL4_ARM_Default_VMAttributes);
 
         /* A frame has already been mapped at this address. This occurs when segments overlap in
@@ -164,7 +167,7 @@ static int load_segment_into_vspace(cspace_t *cspace, seL4_CPtr loadee, char *sr
     return 0;
 }
 
-int elf_load(cspace_t *cspace, seL4_CPtr loadee_vspace, elf_t *elf_file)
+int elf_load(cspace_t *cspace, seL4_CPtr loadee_vspace, elf_t *elf_file, dynarray_t* as)
 {
 
     int num_headers = elf_getNumProgramHeaders(elf_file);
@@ -182,10 +185,21 @@ int elf_load(cspace_t *cspace, seL4_CPtr loadee_vspace, elf_t *elf_file)
         uintptr_t vaddr = elf_getProgramHeaderVaddr(elf_file, i);
         seL4_Word flags = elf_getProgramHeaderFlags(elf_file, i);
 
+        // create the region
+        addrspace_t newas;
+        newas.begin = ROUND_DOWN(vaddr, PAGE_SIZE_4K);
+        newas.end = ROUND_UP(vaddr + segment_size - 1, PAGE_SIZE_4K);
+        newas.perm = get_sel4_rights_from_elf(flags);
+        addrspace_add_errors adderr = addrspace_add(as, newas);
+        if(adderr) {
+            ZF_LOGE("Error processing ELF segment: %d", adderr);
+            return -1;
+        }
+
         /* Copy it across into the vspace. */
         ZF_LOGD(" * Loading segment %p-->%p\n", (void *) vaddr, (void *)(vaddr + segment_size));
         int err = load_segment_into_vspace(cspace, loadee_vspace, source_addr, segment_size, file_size, vaddr,
-                                           get_sel4_rights_from_elf(flags));
+                                           newas.perm);
         if (err) {
             ZF_LOGE("Elf loading failed!");
             return -1;
