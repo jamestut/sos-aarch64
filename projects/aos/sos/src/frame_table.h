@@ -105,6 +105,9 @@ cspace_t *frame_table_cspace(void);
  */
 frame_ref_t alloc_frame(void);
 
+// like alloc_frame, but guaranteed to be zero initialized.
+frame_ref_t alloc_empty_frame(void);
+
 /*
  * Free a frame allocated by the frame table.
  *

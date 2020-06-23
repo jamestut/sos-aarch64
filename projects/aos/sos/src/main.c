@@ -54,6 +54,8 @@
 #include "fileman.h"
 #include "bgworker.h"
 #include "timesyscall.h"
+// GRP01: M3
+#include "vm/mapping2.h"
 
 #include <aos/vsyscall.h>
 
@@ -69,7 +71,7 @@
 #define IRQ_EP_BADGE         BIT(seL4_BadgeBits - 1ul)
 #define IRQ_IDENT_BADGE_BITS MASK(seL4_BadgeBits - 1ul)
 
-#define TTY_NAME             "sosh"
+#define TTY_NAME             "tty_test"
 #define TTY_PRIORITY         (0)
 #define TTY_EP_BADGE         (101)
 
@@ -276,7 +278,7 @@ static uintptr_t init_process_stack(cspace_t *cspace, seL4_CPtr local_vspace, el
     }
 
     /* Map in the stack frame for the user app */
-    seL4_Error err = map_frame(cspace, tty_test_process.stack, tty_test_process.vspace, stack_bottom,
+    seL4_Error err = grp01_map_frame(tty_test_process.stack, tty_test_process.vspace, stack_bottom,
                                seL4_AllRights, seL4_ARM_Default_VMAttributes);
     if (err != 0) {
         ZF_LOGE("Unable to map stack for user app");
@@ -381,7 +383,7 @@ static uintptr_t init_process_stack(cspace_t *cspace, seL4_CPtr local_vspace, el
             return 0;
         }
 
-        err = map_frame(cspace, frame_cptr, tty_test_process.vspace, stack_bottom,
+        err = grp01_map_frame(frame_cptr, tty_test_process.vspace, stack_bottom,
                         seL4_AllRights, seL4_ARM_Default_VMAttributes);
         if (err != 0) {
             cspace_delete(cspace, frame_cptr);
@@ -409,6 +411,9 @@ bool start_first_process(char *app_name, seL4_CPtr ep)
     if (tty_test_process.vspace_ut == NULL) {
         return false;
     }
+
+    // create mapping bookkeeping object for vspace
+    ZF_LOGF_IF(!grp01_map_init(tty_test_process.vspace), "Error allocating mapping bookkepping object.");
 
     /* assign the vspace to an asid pool */
     seL4_Word err = seL4_ARM_ASIDPool_Assign(seL4_CapInitThreadASIDPool, tty_test_process.vspace);
@@ -539,7 +544,7 @@ bool start_first_process(char *app_name, seL4_CPtr ep)
     }
 
     /* Map in the IPC buffer for the thread */
-    err = map_frame(&cspace, tty_test_process.ipc_buffer, tty_test_process.vspace, PROCESS_IPC_BUFFER,
+    err = grp01_map_frame(tty_test_process.ipc_buffer, tty_test_process.vspace, PROCESS_IPC_BUFFER,
                     seL4_AllRights, seL4_ARM_Default_VMAttributes);
     if (err != 0) {
         ZF_LOGE("Unable to map IPC buffer for user app");
@@ -547,7 +552,7 @@ bool start_first_process(char *app_name, seL4_CPtr ep)
     }
 
     // extra page for large data that has to be passed thru IPC
-    err = map_frame(&cspace, tty_test_process.ipc_buffer_large, tty_test_process.vspace, PROCESS_IPC_BUFFER + PAGE_SIZE_4K,
+    err = grp01_map_frame(tty_test_process.ipc_buffer_large, tty_test_process.vspace, PROCESS_IPC_BUFFER + PAGE_SIZE_4K,
                     seL4_AllRights, seL4_ARM_Default_VMAttributes);
     if (err != 0) {
         ZF_LOGE("Unable to map larger IPC buffer for user app");
@@ -659,6 +664,7 @@ NORETURN void *main_continued(UNUSED void *arg)
 
     // GRP01: init OS parts here
     fileman_init();
+    grp01_map_bookkeep_init();
 
     /* run sos initialisation tests */
     run_tests(&cspace);

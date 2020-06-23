@@ -68,6 +68,8 @@ add_executable(
     src/fs/console.c
     src/fs/fakeconsole.c
     src/timesyscall.c
+    # GRP01: M3
+    src/vm/mapping2.c
 )
 target_include_directories(sos PRIVATE "include" "../libsosapi/include")
 target_link_libraries(
@@ -89,6 +91,7 @@ target_link_libraries(
     ethernet
     sel4sync
     sos_Config
+    grp01util
 )
 
 set_property(
