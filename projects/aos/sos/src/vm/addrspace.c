@@ -5,6 +5,9 @@
 #include <utils/zf_log.h>
 #include <utils/zf_log_if.h>
 
+// compile time sanity checks!
+static_assert(sizeof(struct addrspace_attr) == 8);
+
 // comparator functions
 // compare given vaddress and the address space. 0 if vaddr is contained inside address space.
 int comp_vaddr(const void* a, const void* b);
@@ -26,8 +29,9 @@ addrspace_add_errors addrspace_add(dynarray_t* arr, addrspace_t as)
         overlap = comp_as(&as, aslist + pos) == 0;
 
     if(overlap) {
-        // check permission
-        if(memcmp(&as.perm, &aslist[pos].perm, sizeof(seL4_CapRights_t)))
+        // check permission and attribute
+        if(memcmp(&as.perm, &aslist[pos].perm, sizeof(seL4_CapRights_t)) || 
+            memcmp(&as.attr, &aslist[pos].perm, sizeof(struct addrspace_attr)))
             return AS_ADD_CLASH;
         // merge region if possible
         // extend the end if possible

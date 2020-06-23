@@ -38,35 +38,14 @@
 
 #define PAGE_SIZE_4K 0x1000
 
-char mymem[40000];
+char mymem[128];
 
-// Block a thread forever
-// we do this by making an unimplemented system call.
-static void thread_block(void)
-{
-    /* construct some info about the IPC message tty_test will send
-     * to sos -- it's 1 word long */
-    seL4_MessageInfo_t tag = seL4_MessageInfo_new(0, 0, 0, 1);
-    /* Set the first word in the message to 0 */
-    seL4_SetMR(0, 1);
-    /* Now send the ipc -- call will send the ipc, then block until a reply
-     * message is received */
-    seL4_Call(SYSCALL_ENDPOINT_SLOT, tag);
-    /* Currently SOS does not reply -- so we never come back here */
-}
+extern int sos_errno;
 
-static void test_syscall()
+void hello(size_t depth)
 {
-    const char * mystr = "Hello Syscall!";
-    void* target = (uintptr_t)seL4_GetIPCBuffer() + PAGE_SIZE_4K;
-    printf("Address of mystr = %p\n", mystr);
-    printf("Address of IPC buff = %p\n", target);
-    seL4_MessageInfo_t tag = seL4_MessageInfo_new(0, 0, 0, 4);
-    seL4_SetMR(0, 555);
-    seL4_SetMR(1, strlen(mystr));
-    uintptr_t addr = mystr;
-    strcpy(target, mystr);
-    seL4_Call(SYSCALL_ENDPOINT_SLOT, tag);
+    printf("Hello %d!\n", depth);
+    hello(depth + 1);
 }
 
 int main(void)
@@ -76,57 +55,28 @@ int main(void)
     /* initialise communication */
     ttyout_init();
 
-    puts("TTY test = starting console test!");
+    //hello(0);
 
-    /* start testing timestamp */
-    puts("TTY test = starting timestamp test!");
-    
-    while(1) {
-        printf("time(): %d\n",(int)time(NULL));
-        printf("time(): %lld\n",sos_sys_time_stamp());
-        for (volatile int i =0 ; i < 500 * 1000 * 1000 ; i++){}
-    }
-    
-    
-    
-    printf("New Timestamp: %d\n",(int)time(NULL));
-    
-    // do nothing :)
+    char* tst = malloc(13107);
+    printf("malloc = %p\n", tst);
+
+    int fh = open("console", O_RDWR);
+    write(fh, "Hello World!\n", 13);
+    close(fh);
+
+    tst[0] = 'a';
+
     while(1){}
 
-    int rs;
-
-    // initialize data for large writing
-    for(int i=0; i<sizeof(mymem); ++i)
-        mymem[i] = 'a' + (i % 26);
-
-    // test write large
-    int fh1 = open("console", O_RDWR);
-    //printf("fh1 = %d\n", fh1);
-    //printf("writing %d bytes\n", sizeof(mymem));
-    //rs = write(fh1, mymem, sizeof(mymem));
-    //printf("write result = %d\n", rs);
-    
-    puts("Test read");
+    int ctr = 0;
+    calloc(123456789, 1);
     while(1) {
-        // write(fh1, "Delaying. Type something @ console.\n", 36);
-        // volatile uint64_t a;
-        // for(int i=0; i<1000*1000*1000; ++i) { ++a; }
-
-        write(fh1, "Write something: ", 17);
-        int rd = read(fh1, mymem, sizeof(mymem));
-        printf("Read %d bytes\n", rd);
-        mymem[rd] = 0;
-        printf("Read from console: %s\n", mymem);
+        for(int i=1000; i<=100000; ++i) {
+            void* ptr = calloc(i, 1); //tes
+            printf("malloc %d bytes result = %p\n", i, ptr);
+            free(ptr);
+        }
     }
-
-    close(fh1);
-
-    // stop here and busy wait
-    puts("Finished testing. Doing nothing :)");
-
-
-    while(1) {}
 
     return 0;
 }

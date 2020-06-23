@@ -187,6 +187,7 @@ int elf_load(cspace_t *cspace, seL4_CPtr loadee_vspace, elf_t *elf_file, dynarra
 
         // create the region
         addrspace_t newas;
+        *((uint64_t*)&newas.attr) = 0;
         newas.begin = ROUND_DOWN(vaddr, PAGE_SIZE_4K);
         newas.end = ROUND_UP(vaddr + segment_size - 1, PAGE_SIZE_4K);
         newas.perm = get_sel4_rights_from_elf(flags);
