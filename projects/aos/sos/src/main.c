@@ -134,7 +134,7 @@ typedef struct {
 
 proctable_t proctable[MAX_PROC];
 
-void handle_syscall(seL4_Word badge, UNUSED int num_args, seL4_CPtr reply, ut_t* reply_ut)
+void handle_syscall(seL4_Word badge, seL4_CPtr reply, ut_t* reply_ut)
 {
 
     /* get the first word of the message, which in the SOS protocol is the number
@@ -228,6 +228,27 @@ finish:
     }
 }
 
+void handle_fault(seL4_Word badge, seL4_MessageInfo_t message, seL4_CPtr reply, ut_t* reply_ut)
+{
+    seL4_Fault_tag_t fault = seL4_MessageInfo_get_label(message);
+    char msgbuff[32];
+    if(badge >= 1 && badge < MAX_PROC) {
+        // must be from our processes!
+        if(!proctable[badge].active) {
+            snprintf(msgbuff, sizeof(msgbuff)-1, "invalid_%lu", badge);
+            ZF_LOGE("Received invalid fault with badge: %ld", badge);
+            debug_print_fault(message, msgbuff);
+        } else {
+            snprintf(msgbuff, sizeof(msgbuff)-1, "proc_%lu", badge);
+            debug_print_fault(message, msgbuff);
+            ZF_LOGF("The SOS skeleton does not know how to handle faults!");
+        }
+    } else {
+        debug_print_fault(message, "unknown_thread");
+        ZF_LOGE("This fault will not be handled!");
+    }
+}
+
 NORETURN void syscall_loop(seL4_CPtr ep)
 {
     seL4_CPtr reply = 0;
@@ -262,16 +283,13 @@ NORETURN void syscall_loop(seL4_CPtr ep)
              * message from tty_test! */
             // pass the reply_ut also so that we can tell ut that the reply object is no
             // longer used
-            handle_syscall(badge, seL4_MessageInfo_get_length(message) - 1, reply, reply_ut);
+            handle_syscall(badge, reply, reply_ut);
             // indicate to the next loop that we used this reply object
             reply_ut = NULL;
         } else {
-            /* some kind of fault */
-            debug_print_fault(message, TTY_NAME);
-            /* dump registers too */
-            // debug_dump_registers(proctable.tcb);
-
-            ZF_LOGF("The SOS skeleton does not know how to handle faults!");
+            handle_fault(badge, message, reply, reply_ut);
+            // indicate to the next loop that we used this reply object
+            reply_ut = NULL;
         }
     }
 }
@@ -450,15 +468,15 @@ bool start_first_process(char *app_name, seL4_CPtr ep)
     ZF_LOGF_IF(!grp01_map_init(pt->vspace), "Error allocating mapping bookkepping object.");
 
     /* assign the vspace to an asid pool */
-    seL4_Word err = seL4_ARM_ASIDPool_Assign(seL4_CapInitThreadASIDPool, pt->vspace);
+    seL4_Error err = seL4_ARM_ASIDPool_Assign(seL4_CapInitThreadASIDPool, pt->vspace);
     if (err != seL4_NoError) {
         ZF_LOGE("Failed to assign asid pool");
         return false;
     }
 
     /* Create a simple 1 level CSpace */
-    err = cspace_create_one_level(&cspace, &pt->cspace);
-    if (err != CSPACE_NOERROR) {
+    int cerr = cspace_create_one_level(&cspace, &pt->cspace);
+    if (cerr != CSPACE_NOERROR) {
         ZF_LOGE("Failed to create cspace");
         return false;
     }
@@ -537,12 +555,24 @@ bool start_first_process(char *app_name, seL4_CPtr ep)
         return false;
     }
 
+    // badged fault endpoint
+    seL4_CPtr fault_ep = cspace_alloc_slot(&cspace);
+    if(fault_ep == seL4_CapNull) {
+        ZF_LOGE("Unable to create slot for badged fault endpoint");
+        return false;
+    }
+    err = cspace_mint(&cspace, fault_ep, &cspace, ep, seL4_AllRights, TTY_EP_BADGE);
+    if(err != seL4_NoError) {
+        ZF_LOGE("Error minting fault endpoint: %d", err);
+        return false;
+    }
+
     /* bind sched context, set fault endpoint and priority
      * In MCS, fault end point needed here should be in current thread's cspace.
      * NOTE this will use the unbadged ep unlike above, you might want to mint it with a badge
      * so you can identify which thread faulted in your fault handler */
     err = seL4_TCB_SetSchedParams(pt->tcb, seL4_CapInitThreadTCB, seL4_MinPrio, TTY_PRIORITY,
-                                  pt->sched_context, ep);
+                                  pt->sched_context, fault_ep);
     if (err != seL4_NoError) {
         ZF_LOGE("Unable to set scheduling params");
         return false;
