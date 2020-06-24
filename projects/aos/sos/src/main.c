@@ -61,6 +61,7 @@
 #include "vm/mapping2.h"
 #include "vm/addrspace.h"
 #include "vm/syshandlers.h"
+#include "vm/faulthandler.h"
 
 #include <aos/vsyscall.h>
 
@@ -231,9 +232,13 @@ void handle_fault(seL4_Word badge, seL4_MessageInfo_t message, seL4_CPtr reply, 
 {
     seL4_Fault_tag_t fault = seL4_MessageInfo_get_label(message);
     char msgbuff[32];
+
+    bool resume = false;
+
     if(badge >= 1 && badge < MAX_PID) {
+        proctable_t* pt = proctable + badge;
         // must be from our processes!
-        if(!proctable[badge].active) {
+        if(!pt->active) {
             snprintf(msgbuff, sizeof(msgbuff)-1, "invalid_%lu", badge);
             ZF_LOGE("Received invalid fault with badge: %ld", badge);
             debug_print_fault(message, msgbuff);
@@ -241,9 +246,11 @@ void handle_fault(seL4_Word badge, seL4_MessageInfo_t message, seL4_CPtr reply, 
             switch(fault) {
                 case seL4_Fault_NullFault:
                     break;
-                //case seL4_Fault_VMFault:
-                //    // TODO: GRP01
-                //    break;
+                case seL4_Fault_VMFault:
+                    // if vm_fault returns false, vm_fault will debug print the cause instead :)
+                    if(vm_fault(&message, badge, pt->vspace, &pt->as))
+                        resume = true;
+                    break;
                 default:
                     snprintf(msgbuff, sizeof(msgbuff)-1, "proc_%lu", badge);
                     debug_print_fault(message, msgbuff);
@@ -254,6 +261,14 @@ void handle_fault(seL4_Word badge, seL4_MessageInfo_t message, seL4_CPtr reply, 
     } else {
         debug_print_fault(message, "unknown_thread");
         ZF_LOGE("This fault will not be handled!");
+    }
+
+    if(resume) {
+        seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 0);
+        seL4_Send(reply, msg);
+        cspace_delete(&cspace, reply);
+        cspace_free_slot(&cspace, reply);
+        ut_free(reply_ut);
     }
 }
 
