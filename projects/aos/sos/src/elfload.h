@@ -17,4 +17,5 @@
 #include <elf.h>
 #include <grp01/dynaarray.h>
 
-int elf_load(cspace_t *cspace, seL4_CPtr loadee_vspace, elf_t *elf_file, dynarray_t* as);
+// @param badge Identify the process which we're going to load the ELF image for.
+int elf_load(seL4_Word badge, cspace_t *cspace, seL4_CPtr loadee_vspace, elf_t *elf_file, dynarray_t* as);

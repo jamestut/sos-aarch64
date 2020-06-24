@@ -73,7 +73,7 @@ static inline seL4_CapRights_t get_sel4_rights_from_elf(unsigned long permission
  * @return
  *
  */
-static int load_segment_into_vspace(cspace_t *cspace, seL4_CPtr loadee, char *src, size_t segment_size,
+static int load_segment_into_vspace(seL4_Word badge, cspace_t *cspace, seL4_CPtr loadee, char *src, size_t segment_size,
                                     size_t file_size, uintptr_t dst, seL4_CapRights_t permissions)
 {
     assert(file_size <= segment_size);
@@ -107,7 +107,7 @@ static int load_segment_into_vspace(cspace_t *cspace, seL4_CPtr loadee, char *sr
         }
 
         /* map the frame into the loadee address space */
-        err = grp01_map_frame(loadee_frame, loadee, loadee_vaddr, permissions,
+        err = grp01_map_frame(badge, loadee_frame, loadee, loadee_vaddr, permissions,
                         seL4_ARM_Default_VMAttributes);
 
         /* A frame has already been mapped at this address. This occurs when segments overlap in
@@ -167,7 +167,7 @@ static int load_segment_into_vspace(cspace_t *cspace, seL4_CPtr loadee, char *sr
     return 0;
 }
 
-int elf_load(cspace_t *cspace, seL4_CPtr loadee_vspace, elf_t *elf_file, dynarray_t* as)
+int elf_load(seL4_Word badge, cspace_t *cspace, seL4_CPtr loadee_vspace, elf_t *elf_file, dynarray_t* as)
 {
 
     int num_headers = elf_getNumProgramHeaders(elf_file);
@@ -199,7 +199,7 @@ int elf_load(cspace_t *cspace, seL4_CPtr loadee_vspace, elf_t *elf_file, dynarra
 
         /* Copy it across into the vspace. */
         ZF_LOGD(" * Loading segment %p-->%p\n", (void *) vaddr, (void *)(vaddr + segment_size));
-        int err = load_segment_into_vspace(cspace, loadee_vspace, source_addr, segment_size, file_size, vaddr,
+        int err = load_segment_into_vspace(badge, cspace, loadee_vspace, source_addr, segment_size, file_size, vaddr,
                                            newas.perm);
         if (err) {
             ZF_LOGE("Elf loading failed!");

@@ -12,10 +12,10 @@
 #include "fs/nullfile.h"
 #include "bgworker.h"
 #include "ut.h"
+#include "grp01.h"
 
 #include "fileman.h"
 
-#define MAX_PID 128
 #define MAX_FH  128
 #define SPECIAL_HANDLERS 1
 

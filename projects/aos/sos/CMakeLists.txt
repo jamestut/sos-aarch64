@@ -72,6 +72,7 @@ add_executable(
     src/vm/mapping2.c
     src/vm/addrspace.c
     src/vm/syshandlers.c
+    src/vm/faulthandler.c
 )
 target_include_directories(sos PRIVATE "include" "../libsosapi/include")
 target_link_libraries(

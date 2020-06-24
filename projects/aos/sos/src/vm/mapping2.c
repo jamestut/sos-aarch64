@@ -8,7 +8,7 @@
 #include "mapping2.h"
 #include "../frame_table.h"
 #include "../utils.h"
-#include <grp01/hash.h>
+#include "../grp01.h"
 #include <sync/mutex.h>
 #include <utils/zf_log_if.h>
 #include <sel4/sel4_arch/mapping.h>
@@ -68,68 +68,41 @@ struct bookkeeping {
 };
 
 // buckets used to bookeep page table objects.
-struct bookkeeping* bk[BK_BUCKETS] = {0};
-
-// lock the bucket when init/destroy
-struct {
-    seL4_CPtr ntfn;
-    sync_mutex_t lock;
-} bksync;
+// we won't need lock for this structure because we are event based
+struct bookkeeping bk[MAX_PID];
 
 void grp01_map_bookkeep_init()
 {
-    ut_t* ut = alloc_retype(&bksync.ntfn, seL4_NotificationObject, seL4_NotificationBits);
-    ZF_LOGF_IF(!ut, "Failed to allocate notification object.");
-    // mutex creation is always successful if the above object is a valid notification cap
-    sync_mutex_init(&bksync.lock, bksync.ntfn);
+    memset(bk, 0, sizeof(bk));
 }
 
-bool grp01_map_init(seL4_CPtr vspace)
+bool grp01_map_init(seL4_Word badge, seL4_CPtr vspace)
 {
-    // select which bucket to fall into
-    unsigned int bkidx = hash(&vspace, sizeof(vspace)) % BK_BUCKETS;
-
-    bool ret = false;
-
-    sync_mutex_lock(&bksync.lock);
+    // check if badge is valid :)
+    // badge == 0 means we're managing SOS' (not used for now)
+    if(badge >= MAX_PID)
+        return false;
     
     // check if this vspace is not managed by us yet. also find the slot.
-    struct bookkeeping** lbkslot = bk + bkidx;
-    while(*lbkslot) {
-        if((*lbkslot)->vspace == vspace) {
-            // we're already managing this vspace
-            ZF_LOGI("Attempt to create a new mapping bookkeeping on an already managed cspace.");
-            ret = true;
-            goto finish;
-        }
-        lbkslot = &(*lbkslot)->next;
-    }
+    struct bookkeeping* lbk = bk + badge;
+    ZF_LOGF_IF(lbk->vspace, "Attempt to manage page directory for process %d twice!", badge);
 
-    // time to create a new bookkeeping object!
-    *lbkslot = calloc(1, sizeof(struct bookkeeping));
-    if(!*lbkslot) {
-        ZF_LOGE("Error allocating bookkeeping object");
-        goto finish;
-    }
-    (*lbkslot)->vspace = vspace;
-    ret = true;
-finish:
-    sync_mutex_unlock(&bksync.lock);
-    return ret;
+    // we expect that this structure is pristine and empty when vspace == 0!
+    lbk->vspace = vspace;
+
+    return true;
 }
 
-seL4_Error grp01_map_frame(seL4_CPtr frame_cap, seL4_CPtr vspace, seL4_Word vaddr, seL4_CapRights_t rights,
+seL4_Error grp01_map_frame(seL4_Word badge, seL4_CPtr frame_cap, seL4_CPtr vspace, seL4_Word vaddr, seL4_CapRights_t rights,
                      seL4_ARM_VMAttributes attr)
 {
+    if(badge >= MAX_PID)
+        return seL4_RangeError;
+
     // find the bucket
-    unsigned int bkidx = hash(&vspace, sizeof(vspace)) % BK_BUCKETS;
-    struct bookkeeping* lbk;
-    sync_mutex_lock(&bksync.lock);
-    lbk = bk[bkidx];
-    while(lbk && (lbk->vspace != vspace))
-        lbk = lbk->next;
-    sync_mutex_unlock(&bksync.lock);
-    ZF_LOGF_IF(!lbk, "Bookkeeping object was not allocated for this vspace.");
+    struct bookkeeping* lbk = bk + badge;
+    if(lbk->vspace != vspace)
+        return seL4_InvalidArgument;
 
     // allocate shadow tables if not allocated yet for the given vaddr
     struct pagedir* ppd = &lbk->sh_pgd;

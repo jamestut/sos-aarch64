@@ -46,6 +46,7 @@
 #include "utils.h"
 #include "threads.h"
 
+#include "grp01.h"
 #include "grp01/dynaarray.h"
 
 // GRP01: M1
@@ -78,8 +79,6 @@
 #define TTY_NAME             "tty_test"
 #define TTY_PRIORITY         (0)
 #define TTY_EP_BADGE         (101)
-
-#define MAX_PROC             128
 
 /* The number of additional stack pages to provide to the initial
  * process */
@@ -132,7 +131,7 @@ typedef struct {
     dynarray_t as;
 } proctable_t;
 
-proctable_t proctable[MAX_PROC];
+proctable_t proctable[MAX_PID];
 
 void handle_syscall(seL4_Word badge, seL4_CPtr reply, ut_t* reply_ut)
 {
@@ -146,7 +145,7 @@ void handle_syscall(seL4_Word badge, seL4_CPtr reply, ut_t* reply_ut)
 
     // check if badge corresponds to a valid process table entry
     proctable_t* pt = NULL;
-    if(badge == 0 || badge >= MAX_PROC) {
+    if(badge == 0 || badge >= MAX_PID) {
         handler_ret = ESRCH;
         goto finish;
     }
@@ -232,16 +231,25 @@ void handle_fault(seL4_Word badge, seL4_MessageInfo_t message, seL4_CPtr reply, 
 {
     seL4_Fault_tag_t fault = seL4_MessageInfo_get_label(message);
     char msgbuff[32];
-    if(badge >= 1 && badge < MAX_PROC) {
+    if(badge >= 1 && badge < MAX_PID) {
         // must be from our processes!
         if(!proctable[badge].active) {
             snprintf(msgbuff, sizeof(msgbuff)-1, "invalid_%lu", badge);
             ZF_LOGE("Received invalid fault with badge: %ld", badge);
             debug_print_fault(message, msgbuff);
         } else {
-            snprintf(msgbuff, sizeof(msgbuff)-1, "proc_%lu", badge);
-            debug_print_fault(message, msgbuff);
-            ZF_LOGF("The SOS skeleton does not know how to handle faults!");
+            switch(fault) {
+                case seL4_Fault_NullFault:
+                    break;
+                //case seL4_Fault_VMFault:
+                //    // TODO: GRP01
+                //    break;
+                default:
+                    snprintf(msgbuff, sizeof(msgbuff)-1, "proc_%lu", badge);
+                    debug_print_fault(message, msgbuff);
+                    ZF_LOGE("Fault not handled. Offending thread will be suspended indefinitely.");
+                    break;
+            }
         }
     } else {
         debug_print_fault(message, "unknown_thread");
@@ -302,8 +310,11 @@ static int stack_write(seL4_Word *mapped_stack, int index, uintptr_t val)
 
 /* set up System V ABI compliant stack, so that the process can
  * start up and initialise the C library */
-static uintptr_t init_process_stack(proctable_t* pt, cspace_t *cspace, seL4_CPtr local_vspace, elf_t *elf_file)
+static uintptr_t init_process_stack(seL4_Word badge, cspace_t *cspace, seL4_CPtr local_vspace, elf_t *elf_file)
 {
+    // we assume that caller give the sane badge value here!
+    proctable_t* pt = proctable + badge;
+
     /* Create a stack frame */
     pt->stack_ut = alloc_retype(&pt->stack, seL4_ARM_SmallPageObject, seL4_PageBits);
     if (pt->stack_ut == NULL) {
@@ -326,7 +337,7 @@ static uintptr_t init_process_stack(proctable_t* pt, cspace_t *cspace, seL4_CPtr
     }
 
     /* Map in the stack frame for the user app */
-    seL4_Error err = grp01_map_frame(pt->stack, pt->vspace, stack_bottom,
+    seL4_Error err = grp01_map_frame(badge, pt->stack, pt->vspace, stack_bottom,
                                seL4_AllRights, seL4_ARM_Default_VMAttributes);
     if (err != 0) {
         ZF_LOGE("Unable to map stack for user app");
@@ -431,7 +442,7 @@ static uintptr_t init_process_stack(proctable_t* pt, cspace_t *cspace, seL4_CPtr
             return 0;
         }
 
-        err = grp01_map_frame(frame_cptr, pt->vspace, stack_bottom,
+        err = grp01_map_frame(badge, frame_cptr, pt->vspace, stack_bottom,
                         seL4_AllRights, seL4_ARM_Default_VMAttributes);
         if (err != 0) {
             cspace_delete(cspace, frame_cptr);
@@ -465,7 +476,7 @@ bool start_first_process(char *app_name, seL4_CPtr ep)
     }
 
     // create mapping bookkeeping object for vspace
-    ZF_LOGF_IF(!grp01_map_init(pt->vspace), "Error allocating mapping bookkepping object.");
+    ZF_LOGF_IF(!grp01_map_init(TTY_EP_BADGE, pt->vspace), "Error allocating mapping bookkepping object.");
 
     /* assign the vspace to an asid pool */
     seL4_Error err = seL4_ARM_ASIDPool_Assign(seL4_CapInitThreadASIDPool, pt->vspace);
@@ -598,19 +609,19 @@ bool start_first_process(char *app_name, seL4_CPtr ep)
     }
 
     /* set up the stack */
-    seL4_Word sp = init_process_stack(pt, &cspace, seL4_CapInitThreadVSpace, &elf_file);
+    seL4_Word sp = init_process_stack(TTY_EP_BADGE, &cspace, seL4_CapInitThreadVSpace, &elf_file);
 
     /* load the elf image from the cpio file */
     // also pass the address space region dynamic array
     dynarray_init(&pt->as, sizeof(addrspace_t));
-    err = elf_load(&cspace, pt->vspace, &elf_file, &pt->as);
+    err = elf_load(TTY_EP_BADGE, &cspace, pt->vspace, &elf_file, &pt->as);
     if (err) {
         ZF_LOGE("Failed to load elf image");
         return false;
     }
 
     /* Map in the IPC buffer for the thread */
-    err = grp01_map_frame(pt->ipc_buffer, pt->vspace, PROCESS_IPC_BUFFER,
+    err = grp01_map_frame(TTY_EP_BADGE, pt->ipc_buffer, pt->vspace, PROCESS_IPC_BUFFER,
                     seL4_AllRights, seL4_ARM_Default_VMAttributes);
     if (err != 0) {
         ZF_LOGE("Unable to map IPC buffer for user app");
@@ -618,7 +629,7 @@ bool start_first_process(char *app_name, seL4_CPtr ep)
     }
 
     // extra page for large data that has to be passed thru IPC
-    err = grp01_map_frame(pt->ipc_buffer_large, pt->vspace, PROCESS_IPC_BUFFER + PAGE_SIZE_4K,
+    err = grp01_map_frame(TTY_EP_BADGE, pt->ipc_buffer_large, pt->vspace, PROCESS_IPC_BUFFER + PAGE_SIZE_4K,
                     seL4_AllRights, seL4_ARM_Default_VMAttributes);
     if (err != 0) {
         ZF_LOGE("Unable to map larger IPC buffer for user app");
