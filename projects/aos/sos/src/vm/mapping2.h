@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <sel4/sel4.h>
 #include <cspace/cspace.h>
+#include "../frame_table.h"
 
 // initialize mapping with bookkeeping
 void grp01_map_bookkeep_init(void);
@@ -16,5 +17,5 @@ void grp01_map_destroy(seL4_Word badge);
 
 // map a frame given by the frame capability to the given vspace, on SOS' behalf (SOS' cspace).
 // @return 0 on success
-seL4_Error grp01_map_frame(seL4_Word badge, seL4_CPtr frame_cap, seL4_CPtr vspace, seL4_Word vaddr, seL4_CapRights_t rights,
+seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_frame_on_delete, seL4_CPtr vspace, seL4_Word vaddr, seL4_CapRights_t rights,
                      seL4_ARM_VMAttributes attr);

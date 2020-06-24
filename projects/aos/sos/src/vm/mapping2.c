@@ -24,6 +24,10 @@ typedef enum {
     PT_UNDEFINED = -1
 } PDType;
 
+typedef enum {
+    FR_FLAG_NOERASE = 0x8000000000000000ULL
+} FrameRefFlag;
+
 // ---- macro section ----
 
 // index to page table. use PDType above for type param.
@@ -62,9 +66,6 @@ struct bookkeeping {
 
     // shadow PGD that store PUDs (untyped, actual/hardware, and shadow)
     struct pagedir sh_pgd;
-    
-    // linked list in case of hash collision.
-    struct bookkeeping* next;
 };
 
 // buckets used to bookeep page table objects.
@@ -85,7 +86,7 @@ bool grp01_map_init(seL4_Word badge, seL4_CPtr vspace)
     
     // check if this vspace is not managed by us yet. also find the slot.
     struct bookkeeping* lbk = bk + badge;
-    ZF_LOGF_IF(lbk->vspace, "Attempt to manage page directory for process %d twice!", badge);
+    ZF_LOGF_IF(lbk->vspace, "Attempt to manage page directory for process %ld twice!", badge);
 
     // we expect that this structure is pristine and empty when vspace == 0!
     lbk->vspace = vspace;
@@ -93,7 +94,7 @@ bool grp01_map_init(seL4_Word badge, seL4_CPtr vspace)
     return true;
 }
 
-seL4_Error grp01_map_frame(seL4_Word badge, seL4_CPtr frame_cap, seL4_CPtr vspace, seL4_Word vaddr, seL4_CapRights_t rights,
+seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_frame_on_delete, seL4_CPtr vspace, seL4_Word vaddr, seL4_CapRights_t rights,
                      seL4_ARM_VMAttributes attr)
 {
     if(badge >= MAX_PID)
@@ -106,7 +107,7 @@ seL4_Error grp01_map_frame(seL4_Word badge, seL4_CPtr frame_cap, seL4_CPtr vspac
 
     // allocate shadow tables if not allocated yet for the given vaddr
     struct pagedir* ppd = &lbk->sh_pgd;
-    for(PDType pdtype=PT_PGD; pdtype>=PT_PT; --pdtype) {
+    for(PDType pdtype=PT_PGD; pdtype>PT_PT; --pdtype) {
         if(!ppd->dir) {
             if(!(ppd->dir = alloc_empty_frame())) {
                 ZF_LOGE("Cannot allocate frame for shadow page directory");
@@ -115,9 +116,41 @@ seL4_Error grp01_map_frame(seL4_Word badge, seL4_CPtr frame_cap, seL4_CPtr vspac
         }
         ppd = ((struct pagedir*)frame_data(ppd->dir)) + PD_INDEX(vaddr, pdtype);
     }
+    // shadow PT
+    // allocate frame for PT, for storing frame ref and cptr to mapped frame
+    if(!ppd->dir) {
+        ppd->dir = alloc_empty_frame();
+        if(!ppd->dir) {
+            ZF_LOGE("Cannot allocate frame for page table");
+            return seL4_NotEnoughMemory;
+        }
+    }
+    if(!ppd->cap) {
+        ppd->cap = alloc_empty_frame();
+        if(!ppd->cap) {
+            ZF_LOGE("Cannot allocate frame for page table");
+            return seL4_NotEnoughMemory;
+        }
+    }
+
+    seL4_Error err;
+
+    // copy the frame cap so that we can map it to target vspace
+    // because frame table is already mapping the frame
+    seL4_CPtr mapped_frame = cspace_alloc_slot(&cspace);
+    if(mapped_frame == NULL_FRAME) {
+        ZF_LOGE("Cannot allocate cspace slot to map frame");
+        return seL4_NotEnoughMemory;
+    }
+    err = cspace_copy(&cspace, mapped_frame, &cspace, frame_page(frameref), seL4_AllRights);
+    if(err != seL4_NoError) {
+        ZF_LOGE("Cannot copy frame capability for mapping: %d\n", err);
+        return err;
+    }
 
     // try allocating for PUD/PD/PT
-    seL4_Error err = seL4_ARM_Page_Map(frame_cap, vspace, vaddr, rights, attr);
+    err = seL4_ARM_Page_Map(mapped_frame, vspace, vaddr, rights, attr);
+    
     for (size_t i = 0; i < MAPPING_SLOTS && err == seL4_FailedLookup; i++) {
         /* save this so nothing else trashes the message register value */
         seL4_Word failed = seL4_MappingFailedLookupLevel();
@@ -220,7 +253,21 @@ seL4_Error grp01_map_frame(seL4_Word badge, seL4_CPtr frame_cap, seL4_CPtr vspac
         }
 
         // try mapping again
-        err = seL4_ARM_Page_Map(frame_cap, vspace, vaddr, rights, attr);
+        err = seL4_ARM_Page_Map(mapped_frame, vspace, vaddr, rights, attr);
+    }
+
+    // if err here is noerr, it means that we've mapped the frame successfully
+    if(err == seL4_NoError) {
+        // take note the frame to PT
+        ((frame_ref_t*)frame_data(ppd->dir))[PD_INDEX(vaddr, PT_PT)] = frameref 
+            | (free_frame_on_delete ? 0 : FR_FLAG_NOERASE);
+        ((seL4_CPtr*)frame_data(ppd->cap))[PD_INDEX(vaddr, PT_PT)] = mapped_frame;
+    } else {
+        // free up the frames that we've allocated
+        cspace_delete(&cspace, mapped_frame);
+        cspace_free_slot(&cspace, mapped_frame);
+        if(free_frame_on_delete)
+            free_frame(frameref);
     }
 
     return err;

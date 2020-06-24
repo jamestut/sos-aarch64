@@ -83,7 +83,7 @@
 
 /* The number of additional stack pages to provide to the initial
  * process */
-#define INITIAL_PROCESS_EXTRA_STACK_PAGES 4
+#define INITIAL_PROCESS_EXTRA_STACK_PAGES 16
 
 /*
  * A dummy starting syscall
@@ -113,21 +113,14 @@ typedef struct {
     ut_t *vspace_ut;
     seL4_CPtr vspace;
 
-    ut_t *ipc_buffer_ut;
-    seL4_CPtr ipc_buffer;
+    frame_ref_t ipc_buffer_frame;
 
-    ut_t *ipc_buffer_large_ut;
-    seL4_CPtr ipc_buffer_large;
-    seL4_CPtr ipc_buffer_large_local;
-    void* ipc_buffer_large_ptr;
-
+    frame_ref_t ipc_buffer2_frame;
+    
     ut_t *sched_context_ut;
     seL4_CPtr sched_context;
 
     cspace_t cspace;
-
-    ut_t *stack_ut;
-    seL4_CPtr stack;
 
     dynarray_t as;
 } proctable_t;
@@ -165,7 +158,7 @@ void handle_syscall(seL4_Word badge, seL4_CPtr reply, ut_t* reply_ut)
         if(seL4_GetMR(1) >= PAGE_SIZE_4K)
             handler_ret = ENAMETOOLONG * -1;
         else {
-            char * fn = pt->ipc_buffer_large_ptr;
+            char * fn = frame_data(pt->ipc_buffer2_frame);
             fn[seL4_GetMR(1)] = 0;
             handler_ret = fileman_open(badge, reply, reply_ut, fn, seL4_GetMR(2));
         }
@@ -180,7 +173,7 @@ void handle_syscall(seL4_Word badge, seL4_CPtr reply, ut_t* reply_ut)
             handler_ret = EMSGSIZE * -1;
         else
             handler_ret = fileman_read(badge, seL4_GetMR(1), reply, reply_ut, 
-                pt->ipc_buffer_large_ptr, seL4_GetMR(2));
+                frame_data(pt->ipc_buffer2_frame), seL4_GetMR(2));
         break;
 
     case SOS_SYSCALL_WRITE:
@@ -188,7 +181,7 @@ void handle_syscall(seL4_Word badge, seL4_CPtr reply, ut_t* reply_ut)
             handler_ret = EMSGSIZE * -1;
         else 
             handler_ret = fileman_write(badge, seL4_GetMR(1), reply, reply_ut, 
-                pt->ipc_buffer_large_ptr, seL4_GetMR(2));
+                frame_data(pt->ipc_buffer2_frame), seL4_GetMR(2));
         break;
 
     case SOS_SYSCALL_BRK:
@@ -330,19 +323,25 @@ static uintptr_t init_process_stack(seL4_Word badge, cspace_t *cspace, seL4_CPtr
     // we assume that caller give the sane badge value here!
     proctable_t* pt = proctable + badge;
 
-    /* Create a stack frame */
-    pt->stack_ut = alloc_retype(&pt->stack, seL4_ARM_SmallPageObject, seL4_PageBits);
-    if (pt->stack_ut == NULL) {
-        ZF_LOGE("Failed to allocate stack");
+    // create the stack region
+    addrspace_t stackas;
+    stackas.end = PROCESS_STACK_TOP;
+    stackas.begin = PROCESS_STACK_TOP - INITIAL_PROCESS_EXTRA_STACK_PAGES * PAGE_SIZE_4K;
+    stackas.perm = seL4_CapRights_new(false, false, true, true);
+    stackas.attr.type = AS_NORMAL;
+
+    // map this stack region to process' address space
+    if(addrspace_add(&pt->as, stackas) != AS_ADD_NOERR) {
+        ZF_LOGE("Error adding stack address space region to process.");
         return 0;
     }
 
-    /* virtual addresses in the target process' address space */
-    uintptr_t stack_top = PROCESS_STACK_TOP;
-    uintptr_t stack_bottom = PROCESS_STACK_TOP - PAGE_SIZE_4K;
-    /* virtual addresses in the SOS's address space */
-    void *local_stack_top  = (seL4_Word *) SOS_SCRATCH;
-    uintptr_t local_stack_bottom = SOS_SCRATCH - PAGE_SIZE_4K;
+    /* Create a stack frame */
+    frame_ref_t initial_stack = alloc_frame();
+    if(!initial_stack) {
+        ZF_LOGE("Failed to allocate initial stack");
+        return 0;
+    }
 
     /* find the vsyscall table */
     uintptr_t sysinfo = *((uintptr_t *) elf_getSectionNamed(elf_file, "__vsyscall", NULL));
@@ -351,39 +350,17 @@ static uintptr_t init_process_stack(seL4_Word badge, cspace_t *cspace, seL4_CPtr
         return 0;
     }
 
-    /* Map in the stack frame for the user app */
-    seL4_Error err = grp01_map_frame(badge, pt->stack, pt->vspace, stack_bottom,
-                               seL4_AllRights, seL4_ARM_Default_VMAttributes);
+    /* Map in the initial stack frame for the user app */
+    seL4_Error err = grp01_map_frame(badge, initial_stack, true, pt->vspace,
+                               PROCESS_STACK_TOP - PAGE_SIZE_4K, seL4_AllRights, 
+                               seL4_ARM_Default_VMAttributes);
     if (err != 0) {
         ZF_LOGE("Unable to map stack for user app");
         return 0;
     }
 
-    /* allocate a slot to duplicate the stack frame cap so we can map it into our address space */
-    seL4_CPtr local_stack_cptr = cspace_alloc_slot(cspace);
-    if (local_stack_cptr == seL4_CapNull) {
-        ZF_LOGE("Failed to alloc slot for stack");
-        return 0;
-    }
-
-    /* copy the stack frame cap into the slot */
-    err = cspace_copy(cspace, local_stack_cptr, cspace, pt->stack, seL4_AllRights);
-    if (err != seL4_NoError) {
-        cspace_free_slot(cspace, local_stack_cptr);
-        ZF_LOGE("Failed to copy cap");
-        return 0;
-    }
-
-    /* map it into the sos address space */
-    err = map_frame(cspace, local_stack_cptr, local_vspace, local_stack_bottom, seL4_AllRights,
-                    seL4_ARM_Default_VMAttributes);
-    if (err != seL4_NoError) {
-        cspace_delete(cspace, local_stack_cptr);
-        cspace_free_slot(cspace, local_stack_cptr);
-        return 0;
-    }
-
     int index = -2;
+    void *local_stack_top = frame_data(initial_stack) + PAGE_SIZE_4K;
 
     /* null terminate the aux vectors */
     index = stack_write(local_stack_top, index, 0);
@@ -412,61 +389,14 @@ static uintptr_t init_process_stack(seL4_Word badge, cspace_t *cspace, seL4_CPtr
     /* set argc to 0 */
     stack_write(local_stack_top, index, 0);
 
-    /* adjust the initial stack top */
+    /* adjust the initial stack top (for return value) */
+    uintptr_t stack_top = PROCESS_STACK_TOP;
     stack_top += (index * sizeof(seL4_Word));
 
     /* the stack *must* remain aligned to a double word boundary,
      * as GCC assumes this, and horrible bugs occur if this is wrong */
     assert(index % 2 == 0);
     assert(stack_top % (sizeof(seL4_Word) * 2) == 0);
-
-    /* unmap our copy of the stack */
-    err = seL4_ARM_Page_Unmap(local_stack_cptr);
-    assert(err == seL4_NoError);
-
-    /* delete the copy of the stack frame cap */
-    err = cspace_delete(cspace, local_stack_cptr);
-    assert(err == seL4_NoError);
-
-    /* mark the slot as free */
-    cspace_free_slot(cspace, local_stack_cptr);
-
-    /* Exend the stack with extra pages */
-    for (int page = 0; page < INITIAL_PROCESS_EXTRA_STACK_PAGES; page++) {
-        stack_bottom -= PAGE_SIZE_4K;
-        frame_ref_t frame = alloc_frame();
-        if (frame == NULL_FRAME) {
-            ZF_LOGE("Couldn't allocate additional stack frame");
-            return 0;
-        }
-
-        /* allocate a slot to duplicate the stack frame cap so we can map it into the application */
-        seL4_CPtr frame_cptr = cspace_alloc_slot(cspace);
-        if (local_stack_cptr == seL4_CapNull) {
-            free_frame(frame);
-            ZF_LOGE("Failed to alloc slot for stack extra stack frame");
-            return 0;
-        }
-
-        /* copy the stack frame cap into the slot */
-        err = cspace_copy(cspace, frame_cptr, cspace, frame_page(frame), seL4_AllRights);
-        if (err != seL4_NoError) {
-            cspace_free_slot(cspace, frame_cptr);
-            free_frame(frame);
-            ZF_LOGE("Failed to copy cap");
-            return 0;
-        }
-
-        err = grp01_map_frame(badge, frame_cptr, pt->vspace, stack_bottom,
-                        seL4_AllRights, seL4_ARM_Default_VMAttributes);
-        if (err != 0) {
-            cspace_delete(cspace, frame_cptr);
-            cspace_free_slot(cspace, frame_cptr);
-            free_frame(frame);
-            ZF_LOGE("Unable to map extra stack frame for user app");
-            return 0;
-        }
-    }
 
     return stack_top;
 }
@@ -482,6 +412,9 @@ bool start_first_process(char *app_name, seL4_CPtr ep)
     // find process table to use. right now it is hardcoded!
     proctable_t* pt = proctable + TTY_EP_BADGE;
     pt->active = true;
+
+    // initialize some data structure
+    dynarray_init(&pt->as, sizeof(addrspace_t));
     
     /* Create a VSpace */
     pt->vspace_ut = alloc_retype(&pt->vspace, seL4_ARM_PageGlobalDirectoryObject,
@@ -508,31 +441,17 @@ bool start_first_process(char *app_name, seL4_CPtr ep)
     }
 
     /* Create an IPC buffer */
-    pt->ipc_buffer_ut = alloc_retype(&pt->ipc_buffer, seL4_ARM_SmallPageObject,
-                                                  seL4_PageBits);
-    if (pt->ipc_buffer_ut == NULL) {
-        ZF_LOGE("Failed to alloc ipc buffer ut");
+    pt->ipc_buffer_frame = alloc_frame();
+    if (pt->ipc_buffer_frame == 0) {
+        ZF_LOGE("Failed to alloc ipc buffer frame");
         return false;
     }
     // create 2nd IPC buffer for passing large data
-    pt->ipc_buffer_large_ut = alloc_retype(&pt->ipc_buffer_large, seL4_ARM_SmallPageObject,
-        seL4_PageBits);
-    if (pt->ipc_buffer_large_ut == NULL) {
-        ZF_LOGE("Failed to alloc large ipc buffer ut");
-        return false;
+    pt->ipc_buffer2_frame = alloc_frame();
+    if(pt->ipc_buffer2_frame == 0) {
+        ZF_LOGE("Failed to alloc large ipc buffer");
     }
-    // create another copy of this buffer, so that we can map it for ourself!
-    pt->ipc_buffer_large_local = cspace_alloc_slot(&cspace);
-    if(pt->ipc_buffer_large_local == seL4_CapNull) {
-        ZF_LOGE("Failed to allocate the 2nd large ipc frame cspace slot");
-        return false;
-    }
-    err = cspace_copy(&cspace, pt->ipc_buffer_large_local, &cspace, pt->ipc_buffer_large, seL4_AllRights);
-    if(err != 0) {
-        ZF_LOGE("Failed to copy large ipc frame capability");
-        return false;
-    }
-
+    
     /* allocate a new slot in the target cspace which we will mint a badged endpoint cap into --
      * the badge is used to identify the process, which will come in handy when you have multiple
      * processes. */
@@ -557,10 +476,14 @@ bool start_first_process(char *app_name, seL4_CPtr ep)
     }
 
     /* Configure the TCB */
+    // TODO: GRP01: if not working, copy cap to tty_test's cspace!
+    // GRP01: test
+    seL4_CPtr pipcb = cspace_alloc_slot(&cspace);
+    err = cspace_copy(&cspace, pipcb, frame_table_cspace(), frame_page(pt->ipc_buffer_frame), seL4_AllRights);
     err = seL4_TCB_Configure(pt->tcb,
                              pt->cspace.root_cnode, seL4_NilData,
                              pt->vspace, seL4_NilData, PROCESS_IPC_BUFFER,
-                             pt->ipc_buffer);
+                             pipcb);
     if (err != seL4_NoError) {
         ZF_LOGE("Unable to configure new TCB");
         return false;
@@ -628,7 +551,6 @@ bool start_first_process(char *app_name, seL4_CPtr ep)
 
     /* load the elf image from the cpio file */
     // also pass the address space region dynamic array
-    dynarray_init(&pt->as, sizeof(addrspace_t));
     err = elf_load(TTY_EP_BADGE, &cspace, pt->vspace, &elf_file, &pt->as);
     if (err) {
         ZF_LOGE("Failed to load elf image");
@@ -636,7 +558,7 @@ bool start_first_process(char *app_name, seL4_CPtr ep)
     }
 
     /* Map in the IPC buffer for the thread */
-    err = grp01_map_frame(TTY_EP_BADGE, pt->ipc_buffer, pt->vspace, PROCESS_IPC_BUFFER,
+    err = grp01_map_frame(TTY_EP_BADGE, pt->ipc_buffer_frame, true, pt->vspace, PROCESS_IPC_BUFFER,
                     seL4_AllRights, seL4_ARM_Default_VMAttributes);
     if (err != 0) {
         ZF_LOGE("Unable to map IPC buffer for user app");
@@ -644,19 +566,10 @@ bool start_first_process(char *app_name, seL4_CPtr ep)
     }
 
     // extra page for large data that has to be passed thru IPC
-    err = grp01_map_frame(TTY_EP_BADGE, pt->ipc_buffer_large, pt->vspace, PROCESS_IPC_BUFFER + PAGE_SIZE_4K,
+    err = grp01_map_frame(TTY_EP_BADGE, pt->ipc_buffer2_frame, true, pt->vspace, PROCESS_IPC_BUFFER + PAGE_SIZE_4K,
                     seL4_AllRights, seL4_ARM_Default_VMAttributes);
     if (err != 0) {
         ZF_LOGE("Unable to map larger IPC buffer for user app");
-        return false;
-    }
-    // also map it to ourself!
-    // TODO: GRP01 do not hardcode the value like this for the next milestones!
-    pt->ipc_buffer_large_ptr = (void*)(SOS_IPC_BUFFER + PAGE_SIZE_4K);
-    err = map_frame(&cspace, pt->ipc_buffer_large_local, seL4_CapInitThreadVSpace,
-        (seL4_Word)pt->ipc_buffer_large_ptr, seL4_AllRights, seL4_ARM_Default_VMAttributes);
-    if (err != 0) {
-        ZF_LOGE("Unable to map larger IPC buffer for SOS itself");
         return false;
     }
 
