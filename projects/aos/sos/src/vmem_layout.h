@@ -11,6 +11,9 @@
  */
 #pragma once
 
+// the largest vmem allowed in AArch64 (ARMv8.0)
+#define VMEM_TOP             (0x1000000000000)
+
 /* Constants for the layout of the SOS address space */
 
 /* Address where memory used for DMA starts getting mapped.
@@ -33,4 +36,5 @@
 
 #define PROCESS_HEAP        (0x100000000)
 #define PROCESS_HEAP_SIZE   (0xF00000000)
-#define PROCESS_MMAP_MULT   (0x1000000000)
+// bottommost of MMAP region
+#define PROCESS_MMAP        (0x1000000000)

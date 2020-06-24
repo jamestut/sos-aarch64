@@ -18,6 +18,7 @@
 #include <errno.h>
 #include <assert.h>
 
+#ifdef MORECORE_ENABLED
 /*
  * Statically allocated morecore area.
  *
@@ -35,7 +36,6 @@ static uintptr_t morecore_top = (uintptr_t) &morecore_area[MORECORE_AREA_BYTE_SI
    returns 0 if failure, returns newbrk if success.
 */
 
-#ifdef ENABLED
 long sys_brk(va_list ap)
 {
 
@@ -53,7 +53,6 @@ long sys_brk(va_list ap)
 
     return ret;
 }
-#endif
 
 /* Large mallocs will result in muslc calling mmap, so we do a minimal implementation
    here to support that. We make a bunch of assumptions in the process */
@@ -78,3 +77,4 @@ long sys_mmap(va_list ap)
     ZF_LOGF("not implemented");
     return -ENOMEM;
 }
+#endif

@@ -19,3 +19,6 @@ void grp01_map_destroy(seL4_Word badge);
 // @return 0 on success
 seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_frame_on_delete, seL4_CPtr vspace, seL4_Word vaddr, seL4_CapRights_t rights,
                      seL4_ARM_VMAttributes attr);
+
+// @return 0 on lookup failure (e.g. wrong region / unmapped frame)
+frame_ref_t grp01_get_frame(seL4_Word badge, seL4_CPtr vspace, seL4_Word vaddr);

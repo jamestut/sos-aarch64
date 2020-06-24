@@ -31,12 +31,16 @@
 #include <unistd.h>
 #include <errno.h>
 #include <time.h>
+#include <stdbool.h>
 
 #include <sos.h>
 
 #include "ttyout.h"
 
 #define PAGE_SIZE_4K 0x1000
+
+#define MALLOC_SZ    10000007
+#define MALLOC_TEST  10000020
 
 char mymem[128];
 
@@ -55,17 +59,43 @@ int main(void)
     /* initialise communication */
     ttyout_init();
 
-    //hello(0);
-
-    char* tst = malloc(13107);
-    printf("malloc = %p\n", tst);
+    char msgbuff[128];
+    int msglen;
 
     int fh = open("console", O_RDWR);
     write(fh, "Hello World!\n", 13);
+
+    msglen = sprintf(msgbuff, "Test malloc size = %d, actual = %d\n", MALLOC_SZ, MALLOC_TEST);
+    write(fh, msgbuff, msglen);
+
+    char* ptr = malloc(MALLOC_SZ);
+    msglen = sprintf(msgbuff, "malloc ptr is = %p\n", ptr);
+    write(fh, msgbuff, msglen);
+    msglen = sprintf(msgbuff, "test write\n");
+    write(fh, msgbuff, msglen);
+
+    for(int i=0; i<MALLOC_TEST; ++i)
+        ptr[i] = 'A' + (i % 26);
+
+    msglen = sprintf(msgbuff, "test read\n");
+    write(fh, msgbuff, msglen);
+
+    bool haserr = false;
+    for(int i=0; i<MALLOC_TEST; ++i) {
+        if(ptr[i] != ('A' + (i % 26))) {
+            msglen = sprintf(msgbuff, "Data error at item #%d\n", i);
+            write(fh, msgbuff, msglen);
+            haserr = true;
+            break;
+        }
+    }
+
+    if(!haserr) {
+        msglen = sprintf(msgbuff, "test passed!\n");
+        write(fh, msgbuff, msglen);
+    }
+    
     close(fh);
-
-    tst[0] = 'a';
-
     while(1){}
 
     int ctr = 0;

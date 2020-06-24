@@ -15,6 +15,8 @@
 
 #define BK_BUCKETS 4
 #define FRAME_TABLE_BITS 19
+#define FR_FLAG_AREA     0xFF00000000000000ULL
+#define FR_FLAG_REF_AREA (~FR_FLAG_AREA)
 
 typedef enum {
     PT_PGD = 3,
@@ -97,7 +99,7 @@ bool grp01_map_init(seL4_Word badge, seL4_CPtr vspace)
 seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_frame_on_delete, seL4_CPtr vspace, seL4_Word vaddr, seL4_CapRights_t rights,
                      seL4_ARM_VMAttributes attr)
 {
-    if(badge >= MAX_PID)
+    if(badge >= MAX_PID || !vspace)
         return seL4_RangeError;
 
     // find the bucket
@@ -134,6 +136,10 @@ seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_fram
     }
 
     seL4_Error err;
+
+    // check if frame is already mapped to our data structure
+    if(((frame_ref_t*)frame_data(ppd->dir))[PD_INDEX(vaddr, PT_PT)]) 
+        return seL4_DeleteFirst;
 
     // copy the frame cap so that we can map it to target vspace
     // because frame table is already mapping the frame
@@ -271,4 +277,23 @@ seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_fram
     }
 
     return err;
+}
+
+frame_ref_t grp01_get_frame(seL4_Word badge, seL4_CPtr vspace, seL4_Word vaddr)
+{
+    // the usual checking
+    if(badge >= MAX_PID || !vspace)
+        return 0;
+    struct bookkeeping* lbk = bk + badge;
+    if(lbk->vspace != vspace)
+        return 0;
+
+    struct pagedir* ppd = &lbk->sh_pgd;
+    for(PDType pdtype=PT_PGD; pdtype>PT_PT; --pdtype) {
+        if(!ppd->dir)
+            return 0;
+        ppd = ((struct pagedir*)frame_data(ppd->dir)) + PD_INDEX(vaddr, pdtype);
+    }
+
+    return ((frame_ref_t*)frame_data(ppd->dir))[PD_INDEX(vaddr, PT_PT)] & FR_FLAG_REF_AREA;
 }

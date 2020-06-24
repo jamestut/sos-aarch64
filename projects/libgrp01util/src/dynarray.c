@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <utils/arith.h>
+#include <utils/zf_log_if.h>
 
 void dynarray_init(struct dynarray_state* state, uint32_t itemsz)
 {
@@ -20,6 +21,10 @@ bool dynarray_resize(struct dynarray_state* state, uint32_t target)
     if(IS_POWER_OF_2(target))
         --target;
     target = NEXT_POWER_OF_2(target);
+    if(target < state->capacity) {
+        ZF_LOGW("Approaching the end of 32 bit.");
+        target = 0xFFFFFFFF;
+    }
     
     // try allocate
     // we assume here that the realloc won't touch the old pointer if it fails

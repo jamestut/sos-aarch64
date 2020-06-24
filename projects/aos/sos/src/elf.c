@@ -85,7 +85,6 @@ static int load_segment_into_vspace(seL4_Word badge, cspace_t *cspace, seL4_CPtr
         uintptr_t loadee_vaddr = (ROUND_DOWN(dst, PAGE_SIZE_4K));
 
         /* allocate the untyped for the loadees address space */
-        // TODO: GRP01 bookkeep this frame
         frame_ref_t frame = alloc_frame();
         if (frame == NULL_FRAME) {
             ZF_LOGD("Failed to alloc frame");
@@ -106,15 +105,18 @@ static int load_segment_into_vspace(seL4_Word badge, cspace_t *cspace, seL4_CPtr
         bool already_mapped = (err == seL4_DeleteFirst);
 
         if (already_mapped) {
+            // return the allocated frame back to frame_table
             free_frame(frame);
-            ZF_LOGF("Mapping overlapping segment is not supported now.");
+            // get the allocated frame instead :)
+            frame = grp01_get_frame(badge, loadee, loadee_vaddr);
+            // if we got FRAME_NULL here, we have a serious bug!
+            ZF_LOGF_IF(!frame, "Got NULL frame, but the frame was already mapped.");
         } else if (err != seL4_NoError) {
             ZF_LOGE("Failed to map into loadee at %p, error %u", (void *) loadee_vaddr, err);
             return -1;
         }
 
         /* finally copy the data */
-        // TODO: take into account already mapped frame
         unsigned char *loader_data = frame_data(frame);
 
         /* Write any zeroes at the start of the block. */

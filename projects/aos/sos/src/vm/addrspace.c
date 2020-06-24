@@ -1,4 +1,5 @@
 #include "addrspace.h"
+#include "../utils.h"
 #include <string.h>
 #include <grp01/binsearch.h>
 #include <utils/builtin.h>
@@ -19,6 +20,8 @@ addrspace_add_errors addrspace_add(dynarray_t* arr, addrspace_t as)
 {
     if(as.end <= as.begin)
         return AS_ADD_INVALIDARG;
+    if(arr->used == 0x7FFFFFFF)
+        return AS_ADD_NOMEM;
 
     addrspace_t* aslist = arr->data;
     int pos = binary_search(aslist, &as, sizeof(addrspace_t), arr->used, comp_as, true);
@@ -69,6 +72,9 @@ addrspace_add_errors addrspace_add(dynarray_t* arr, addrspace_t as)
 
 int addrspace_find(dynarray_t* arr, uintptr_t vaddr)
 {
+    // 0th page is always invalid!
+    if(vaddr < PAGE_SIZE_4K)
+        return -1;
     return binary_search(arr->data, &vaddr, sizeof(addrspace_t), arr->used, comp_vaddr, false);
 }
 

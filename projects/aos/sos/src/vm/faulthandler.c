@@ -18,13 +18,14 @@ bool vm_fault(seL4_MessageInfo_t* tag, seL4_Word badge, seL4_CPtr vspace, dynarr
     seL4_Fault_t fault = seL4_getFault(*tag);
     uintptr_t faultaddr = (uintptr_t)seL4_Fault_VMFault_get_Addr(fault);
     uintptr_t currip = (uintptr_t)seL4_Fault_VMFault_get_IP(fault);
-    uintptr_t prefetchfault = seL4_Fault_VMFault_get_PrefetchFault(fault);
+    bool prefetchfault = seL4_Fault_VMFault_get_PrefetchFault(fault);
     bool write = seL4_GetMR(seL4_VMFault_FSR) & BIT(6);
 
     // first, find the address space region
     int asidx = addrspace_find(asarr, faultaddr);
     if(asidx < 0) {
-        ZF_LOGE("Fault address does not belong to any of the app's region.");
+        ZF_LOGE("VM: %s fault%s @ %p (IP %p) of process %ld.", 
+            (write ? "Write" : "Read"), (prefetchfault ? " (exec)" : ""), faultaddr, currip, badge);
         return false;
     }
     addrspace_t* as = ((addrspace_t*)asarr->data) + asidx;

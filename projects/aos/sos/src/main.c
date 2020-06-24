@@ -184,6 +184,11 @@ void handle_syscall(seL4_Word badge, seL4_CPtr reply, ut_t* reply_ut)
                 frame_data(pt->ipc_buffer2_frame), seL4_GetMR(2));
         break;
 
+    case SOS_SYSCALL_MMAP:
+        handler_ret = handle_mmap(&pt->as, seL4_GetMR(1), seL4_GetMR(2), seL4_GetMR(3), 
+            seL4_GetMR(4), seL4_GetMR(5), seL4_GetMR(6));
+        break;
+
     case SOS_SYSCALL_BRK:
         handler_ret = handle_brk(&pt->as, seL4_GetMR(1));
         break;
