@@ -70,6 +70,14 @@ addrspace_add_errors addrspace_add(dynarray_t* arr, addrspace_t as)
     return AS_ADD_NOERR;
 }
 
+void addrspace_remove(dynarray_t* arr, uint32_t index)
+{
+    ZF_LOGF_IF(index >= arr->used, "Out of bound");
+    addrspace_t* as = arr->data;
+    memmove(as + index, as + index + 1, (arr->used - index - 1) * sizeof(addrspace_t));
+    --arr->used;
+}
+
 int addrspace_find(dynarray_t* arr, uintptr_t vaddr)
 {
     // 0th page is always invalid!

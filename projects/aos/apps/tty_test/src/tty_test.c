@@ -32,6 +32,7 @@
 #include <errno.h>
 #include <time.h>
 #include <stdbool.h>
+#include <sys/mman.h>
 
 #include <sos.h>
 
@@ -39,8 +40,8 @@
 
 #define PAGE_SIZE_4K 0x1000
 
-#define MALLOC_SZ    10000007
-#define MALLOC_TEST  10000020
+#define MALLOC_SZ    1234
+#define MALLOC_TEST  4000
 
 char mymem[128];
 
@@ -54,10 +55,16 @@ void hello(size_t depth)
 
 int main(void)
 {
+    long ret;
     sosapi_init_syscall_table();
 
     /* initialise communication */
     ttyout_init();
+
+    printf("Current stack is %d pages\n", sos_grow_stack(0));
+    printf("New stack is now %d pages\n", sos_grow_stack(999999999));
+    printf("Regrowing again. Stack is now %d pages\n", sos_grow_stack(999999999));
+    //hello(0);
 
     char msgbuff[128];
     int msglen;
@@ -68,14 +75,40 @@ int main(void)
     msglen = sprintf(msgbuff, "Test malloc size = %d, actual = %d\n", MALLOC_SZ, MALLOC_TEST);
     write(fh, msgbuff, msglen);
 
-    char* ptr = malloc(MALLOC_SZ);
+    char* ptr = mmap(NULL, 16384, PROT_WRITE | PROT_READ, MAP_ANON, 0, 0);
+    printf("ptr1: %p\n", ptr);
+    char* ptr2 = mmap(NULL, 32768, PROT_WRITE | PROT_READ, MAP_ANON, 0, 0);
+    printf("ptr2: %p\n", ptr2);
+    char* ptr3 = mmap(NULL, 65536, PROT_WRITE | PROT_READ, MAP_ANON, 0, 0);
+    printf("ptr3: %p\n", ptr3);
+    char* ptr4 = mmap(NULL, 131072, PROT_WRITE | PROT_READ, MAP_ANON, 0, 0);
+    printf("ptr4: %p\n", ptr4);
+    ptr[2] = 'a';
+    ptr[14000] = 'b';
+    ptr[10000] = 'c';
+    ret = munmap(ptr + 4096, 8192);
+    printf("Unmapped\n");
+    munmap(ptr4 + 8192, 32768);
+    ptr4[7700] = 'z';
+    puts("OK");
+    ptr4[100000] = 'z';
+    puts("OK");
+    ptr4[12000] = 'z';
+    puts("OK");
+
+
     msglen = sprintf(msgbuff, "malloc ptr is = %p\n", ptr);
     write(fh, msgbuff, msglen);
     msglen = sprintf(msgbuff, "test write\n");
     write(fh, msgbuff, msglen);
 
-    for(int i=0; i<MALLOC_TEST; ++i)
+    for(int i=0; i<MALLOC_TEST; ++i) {
         ptr[i] = 'A' + (i % 26);
+        if(i % PAGE_SIZE_4K == 0) {
+            //msglen = sprintf(msgbuff, "Wrote %d chars\n", i);
+            //write(fh, msgbuff, msglen);
+        }
+    }
 
     msglen = sprintf(msgbuff, "test read\n");
     write(fh, msgbuff, msglen);

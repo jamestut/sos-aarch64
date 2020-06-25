@@ -49,3 +49,21 @@ long sys_mmap(va_list ap)
     // negative errno semantic, but we return to caller as-is
     return seL4_GetMR(0);
 }
+
+long sys_munmap(va_list ap)
+{
+    // params
+    void* start = va_arg(ap, void *);
+    size_t length = va_arg(ap, size_t);
+    
+    seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, 7);
+    seL4_SetMR(0, SOS_SYSCALL_MUNMAP);
+    seL4_SetMR(1, start);
+    seL4_SetMR(2, length);
+    
+    msginfo = seL4_Call(SOS_IPC_EP_CAP, msginfo);
+
+    if(seL4_GetMR(0) < 0)
+        return -1;
+    return 0; // OK
+}

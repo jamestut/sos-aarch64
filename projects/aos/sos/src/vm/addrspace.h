@@ -42,4 +42,8 @@ typedef enum {
 // while maintaining the sorted order.
 addrspace_add_errors addrspace_add(dynarray_t* arr, addrspace_t as);
 
+// remove the address space, while maintaining the sorted order.
+// it is the caller's responsibility to unmap frames associated with the region.
+void addrspace_remove(dynarray_t* arr, uint32_t index);
+
 int addrspace_find(dynarray_t* arr, uintptr_t vaddr);

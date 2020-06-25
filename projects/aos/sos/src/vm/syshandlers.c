@@ -2,6 +2,7 @@
 #include "../utils.h"
 #include "syshandlers.h"
 #include "addrspace.h"
+#include "mapping2.h"
 #include <utils/zf_log_if.h>
 #include <errno.h>
 #include <sel4/sel4.h>
@@ -131,6 +132,56 @@ ssize_t handle_mmap(dynarray_t* asarr, uintptr_t addr, size_t len, int prot,
 
     // OK!
     return mmapas.begin;
+}
+
+ssize_t handle_munmap(dynarray_t* asarr, seL4_Word badge, seL4_CPtr vspace, 
+    uintptr_t vaddr, size_t len)
+{
+    if(vaddr % PAGE_SIZE_4K)
+        return -EINVAL;
+    int asidx = addrspace_find(asarr, vaddr);
+    if(asidx < 0)
+        return -EINVAL;
+    addrspace_t* as = ((addrspace_t*)asarr->data) + asidx;
+    if(as->attr.type != AS_MMAP)
+        return -EINVAL;
+
+    // if len is not page aligned and is smaller than the region's space,
+    // we'll reject it
+    bool deletewhole = false;
+    if(len >= (as->end - as->begin))
+        deletewhole = true;
+    
+    if(!deletewhole && (len % PAGE_SIZE_4K))
+        return -EINVAL;
+
+    // these suboperations should never ever returns an error unless we have bug!
+    if(deletewhole) {
+        // easy! just delete the entire AS!
+        ZF_LOGF_IF(grp01_unmap_frame(badge, vspace, as->begin, as->end) != seL4_NoError,
+            "Fatal unmap error!");
+        addrspace_remove(asarr, asidx);
+    } else {
+        ZF_LOGF_IF(grp01_unmap_frame(badge, vspace, vaddr, vaddr + len) != seL4_NoError,
+            "Fatal unmap error!");
+        
+        // require 1 more AS? or is resizing enough?
+        if(vaddr == as->begin) 
+            as->begin += len;
+        else if((vaddr + len) == as->end)
+            as->end -= len;
+        else {
+            addrspace_t as2;
+            as2 = *as;
+            as->end = vaddr;
+            as2.begin = vaddr + len;
+            // it's difficult to rollback if we got an error here. We think it is better
+            // to panic instead!
+            ZF_LOGF_IF(addrspace_add(asarr, as2) != AS_ADD_NOERR, "Error adding AS");
+        }
+    }
+    
+    return 1;
 }
 
 ssize_t handle_grow_stack(dynarray_t* asarr, size_t bypage)

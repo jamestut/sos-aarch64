@@ -7,6 +7,7 @@
 #define SOS_SYSCALL_OPEN          2
 #define SOS_SYSCALL_CLOSE         3
 #define SOS_SYSCALL_MMAP          9
+#define SOS_SYSCALL_MUNMAP       11
 #define SOS_SYSCALL_BRK          12
 #define SOS_SYSCALL_USLEEP       35 // equivalent to linux's nanosleep
 #define SOS_SYSCALL_TIMESTAMP   201 // linux's time 

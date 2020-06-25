@@ -10,6 +10,7 @@
 #include "../utils.h"
 #include "../grp01.h"
 #include <sync/mutex.h>
+#include <sys/types.h>
 #include <utils/zf_log_if.h>
 #include <sel4/sel4_arch/mapping.h>
 
@@ -277,6 +278,94 @@ seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_fram
     }
 
     return err;
+}
+
+seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_CPtr vspace, seL4_Word vaddrbegin, seL4_Word vaddrend)
+{
+    // must pass a page aligned address here!
+    ZF_LOGF_IF((vaddrbegin % PAGE_SIZE_4K) || (vaddrend % PAGE_SIZE_4K), "vaddr not page aligned");
+    if(vaddrend < vaddrbegin)
+        return seL4_RangeError;
+
+    if(badge >= MAX_PID || !vspace)
+        return seL4_RangeError;
+
+    // find the bucket
+    struct bookkeeping* lbk = bk + badge;
+    if(lbk->vspace != vspace)
+        return seL4_InvalidArgument;
+
+    ssize_t numpages = (vaddrend - vaddrbegin) >> seL4_PageBits;
+
+    uint16_t indices[4];
+    for(int i = PT_PT; i <= PT_PGD; ++i)
+        indices[i] = PD_INDEX(vaddrbegin, i);
+    
+    struct pagedir pud, pd, pt;
+    frame_ref_t* fr;
+    seL4_CPtr* frcap;
+
+    while(numpages) { // PGD
+        pud = PD_ENTRY(lbk->sh_pgd, indices[PT_PGD]);
+        if(pud.dir) {
+            while(numpages) { // PUD
+                pd = PD_ENTRY(pud, indices[PT_PUD]);
+                if(pd.dir) {
+                    while(numpages) { // PD
+                        pt = PD_ENTRY(pd, indices[PT_PD]);
+                        if(pt.dir) {
+                            ZF_LOGF_IF(!pt.cap, "Page table has frame table but no capability table");
+                            while(numpages--) { // PT
+                                fr = ((frame_ref_t*)frame_data(pt.dir)) + indices[PT_PT];
+                                if(*fr) {
+                                    // the actual unmapping
+                                    frcap = ((frame_ref_t*)frame_data(pt.cap)) + indices[PT_PT];
+                                    ZF_LOGE_IF(seL4_ARM_Page_Unmap(*frcap) != seL4_NoError,
+                                        "Error unmapping frame");
+                                    // free the duplicated capability
+                                    ZF_LOGE_IF(cspace_delete(&cspace, *frcap) != seL4_NoError,
+                                        "Error deleting capability for frame");
+                                    cspace_free_slot(&cspace, *frcap);
+                                    // return frame back to frame table
+                                    if(!(*fr & FR_FLAG_NOERASE))
+                                        free_frame(*fr & FR_FLAG_REF_AREA);
+                                    // zero out the PT
+                                    *fr = *frcap = 0;
+                                }
+                                if(++indices[PT_PT] >= 512) {
+                                    indices[PT_PT] = 0;
+                                    break;
+                                }
+                            }
+                        } else {
+                            numpages = MAX(0, numpages - (512 - indices[PT_PT]));
+                            indices[PT_PT] = 0;
+                        }
+                        if(++indices[PT_PD] >= 512) {
+                            indices[PT_PD] = 0;
+                            break;
+                        }
+                    }
+                } else {
+                    numpages = MAX(0, numpages - (512 - indices[PT_PT]));
+                    numpages = MAX(0, numpages - (512 - (indices[PT_PD] + 1)) * 512);
+                    indices[PT_PT] = indices[PT_PD] = 0;
+                }
+                if(++indices[PT_PUD] >= 512) {
+                    indices[PT_PUD] = 0;
+                    break;
+                }
+            }
+        } else {
+            numpages = MAX(0, numpages - (512 - indices[PT_PT]));
+            numpages = MAX(0, numpages - (512 - (indices[PT_PD] + 1)) * 512);
+            numpages = MAX(0, numpages - (512 - (indices[PT_PUD] + 1)) * 512*512);
+            indices[PT_PT] = indices[PT_PD] = indices[PT_PUD] = 0;
+        }
+        if(++indices[PT_PGD] >= 512) 
+            ZF_LOGF("PGD index out of bound!");
+    }
+    return seL4_NoError;
 }
 
 frame_ref_t grp01_get_frame(seL4_Word badge, seL4_CPtr vspace, seL4_Word vaddr)

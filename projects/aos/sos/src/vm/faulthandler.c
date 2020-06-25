@@ -30,9 +30,12 @@ bool vm_fault(seL4_MessageInfo_t* tag, seL4_Word badge, seL4_CPtr vspace, dynarr
     }
     addrspace_t* as = ((addrspace_t*)asarr->data) + asidx;
 
-    // check if we're writing and allowed to write
+    // check if we're writing and allowed to write / read and allowed to read
     if(write && !seL4_CapRights_get_capAllowWrite(as->perm)) {
-        ZF_LOGE("Write fault on read only region.");
+        ZF_LOGE("Write fault on no-write region.");
+        return false;
+    } else if(!write && !seL4_CapRights_get_capAllowRead(as->perm)) {
+        ZF_LOGE("Read fault on no-read region.");
         return false;
     }
 
