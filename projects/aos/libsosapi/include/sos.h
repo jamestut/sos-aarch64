@@ -129,6 +129,9 @@ void sos_sys_usleep(int msec);
 /* Sleeps for the specified number of milliseconds.
  */
 
+size_t sos_grow_stack(size_t pages);
+// Grow the stack by the specified pages. Returns the size of stack in pages.
+// Once stack grows, it can't be shrunk.
 
 /*************************************************************************/
 /*                                   */

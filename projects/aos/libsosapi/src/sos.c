@@ -16,6 +16,7 @@
 #include <stdbool.h>
 #include <stdarg.h>
 #include <sos.h>
+#include <sys/types.h>
 
 #include <sel4/sel4.h>
 #include <errno.h>
@@ -201,6 +202,18 @@ int sos_sys_rw(bool read, int file, char *buf, size_t nbyte)
 void* sos_large_ipc_buffer(void)
 {
     return (void*)((uintptr_t)seL4_GetIPCBuffer() + MAX_IO_BUF);
+}
+
+size_t sos_grow_stack(size_t pages)
+{
+    seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, 2);
+    seL4_SetMR(0, SOS_SYSCALL_GROW_STACK);
+    seL4_SetMR(1, pages);
+    seL4_Call(SOS_IPC_EP_CAP, msginfo);
+
+    ssize_t ret = seL4_GetMR(0);
+    if(ret < 0)
+        return 0;
 }
 
 int sos_sys_not_implemented()

@@ -132,3 +132,44 @@ ssize_t handle_mmap(dynarray_t* asarr, uintptr_t addr, size_t len, int prot,
     // OK!
     return mmapas.begin;
 }
+
+ssize_t handle_grow_stack(dynarray_t* asarr, size_t bypage)
+{
+    // find the stack by looking the vaddr of the bottom of the 1st page
+    uintptr_t vaddr = PROCESS_STACK_TOP - PAGE_SIZE_4K;
+    int asidx = addrspace_find(asarr, vaddr);
+    if(asidx < 0)
+        return -1;
+
+    // truncate
+    if(bypage > PROCESS_STACK_MAX_PAGES)
+        bypage = PROCESS_STACK_MAX_PAGES;
+    
+    addrspace_t* as = ((addrspace_t*)asarr->data);
+    addrspace_t* stackas = as + asidx;
+    // ensure that it is the stack
+    if(stackas->attr.type != AS_STACK)
+        return -1;
+
+    size_t numpages = (stackas->end - stackas->begin) >> seL4_PageBits;
+    // do not modify if request is too large (or 0)
+    if(!bypage || (bypage > (VMEM_TOP >> seL4_PageBits)))
+        return numpages;
+
+    numpages += bypage;
+    uintptr_t newbegin = stackas->end - (numpages << seL4_PageBits);
+    // check for region collision
+    if(asidx) {
+        if(as[asidx - 1].end > newbegin)
+            newbegin = as[asidx - 1].end + 1; // add a guard page!
+        numpages = (stackas->end - newbegin) >> seL4_PageBits;
+    }
+    
+    // truncate stack size if it is more than what we're willing!
+    if (numpages > PROCESS_STACK_MAX_PAGES)
+        numpages = PROCESS_STACK_MAX_PAGES;
+    
+    // enlarge
+    stackas->begin = stackas->end - (numpages << seL4_PageBits);
+    return numpages;
+}

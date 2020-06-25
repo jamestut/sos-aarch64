@@ -10,8 +10,10 @@ typedef enum {
     AS_NORMAL = 0,
     // same as above, but indicates that this was created from brk
     AS_HEAP = 1,
-    // has a special action on fault
-    AS_MMAP = 2
+    // same as above, but indicates that this was designated for stack
+    AS_STACK = 2,
+    // may have a special action on fault depending on the "data" field
+    AS_MMAP = 3
     //AS_SHARED
 } addrspace_type;
 
