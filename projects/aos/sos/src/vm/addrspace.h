@@ -40,7 +40,7 @@ typedef enum {
 
 // add the address space to the designated dynamic array that contains the address space,
 // while maintaining the sorted order.
-addrspace_add_errors addrspace_add(dynarray_t* arr, addrspace_t as);
+addrspace_add_errors addrspace_add(dynarray_t* arr, addrspace_t as, bool allowoverlap, uint32_t* idx);
 
 // remove the address space, while maintaining the sorted order.
 // it is the caller's responsibility to unmap frames associated with the region.

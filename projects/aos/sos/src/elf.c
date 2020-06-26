@@ -73,7 +73,7 @@ static inline seL4_CapRights_t get_sel4_rights_from_elf(unsigned long permission
  * @return
  *
  */
-static int load_segment_into_vspace(seL4_Word badge, cspace_t *cspace, seL4_CPtr loadee, char *src, size_t segment_size,
+static int load_segment_into_vspace(seL4_Word badge, seL4_CPtr loadee, char *src, size_t segment_size,
                                     size_t file_size, uintptr_t dst, seL4_CapRights_t permissions)
 {
     assert(file_size <= segment_size);
@@ -155,7 +155,7 @@ static int load_segment_into_vspace(seL4_Word badge, cspace_t *cspace, seL4_CPtr
     return 0;
 }
 
-int elf_load(seL4_Word badge, cspace_t *cspace, seL4_CPtr loadee_vspace, elf_t *elf_file, dynarray_t* as)
+int elf_load(seL4_Word badge, UNUSED cspace_t *cspace, seL4_CPtr loadee_vspace, elf_t *elf_file, dynarray_t* as)
 {
     int num_headers = elf_getNumProgramHeaders(elf_file);
     for (int i = 0; i < num_headers; i++) {
@@ -178,7 +178,7 @@ int elf_load(seL4_Word badge, cspace_t *cspace, seL4_CPtr loadee_vspace, elf_t *
         newas.begin = ROUND_DOWN(vaddr, PAGE_SIZE_4K);
         newas.end = ROUND_UP(vaddr + segment_size - 1, PAGE_SIZE_4K);
         newas.perm = get_sel4_rights_from_elf(flags);
-        addrspace_add_errors adderr = addrspace_add(as, newas);
+        addrspace_add_errors adderr = addrspace_add(as, newas, true, NULL);
         if(adderr) {
             ZF_LOGE("Error processing ELF segment: %d", adderr);
             return -1;
@@ -186,7 +186,7 @@ int elf_load(seL4_Word badge, cspace_t *cspace, seL4_CPtr loadee_vspace, elf_t *
 
         /* Copy it across into the vspace. */
         ZF_LOGD(" * Loading segment %p-->%p\n", (void *) vaddr, (void *)(vaddr + segment_size));
-        int err = load_segment_into_vspace(badge, cspace, loadee_vspace, source_addr, segment_size, file_size, vaddr,
+        int err = load_segment_into_vspace(badge, loadee_vspace, source_addr, segment_size, file_size, vaddr,
                                            newas.perm);
         if (err) {
             ZF_LOGE("Elf loading failed!");

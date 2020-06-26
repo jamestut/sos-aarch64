@@ -49,7 +49,7 @@ ssize_t handle_brk(dynarray_t* arr, size_t brksz)
         heapas.attr.type = AS_HEAP;
         heapas.perm = rights;
         
-        if(addrspace_add(arr, heapas) != AS_ADD_NOERR) {
+        if(addrspace_add(arr, heapas, false, NULL) != AS_ADD_NOERR) {
             ZF_LOGE("Failed to add heap address space section.");
             return ENOMEM * -1;
         }
@@ -127,7 +127,7 @@ ssize_t handle_mmap(dynarray_t* asarr, uintptr_t addr, size_t len, int prot,
     }
 
     // try adding the region
-    if(addrspace_add(asarr, mmapas) != AS_ADD_NOERR)
+    if(addrspace_add(asarr, mmapas, false, NULL) != AS_ADD_NOERR)
         return ENOMEM * -1;
 
     // OK!
@@ -177,7 +177,7 @@ ssize_t handle_munmap(dynarray_t* asarr, seL4_Word badge, seL4_CPtr vspace,
             as2.begin = vaddr + len;
             // it's difficult to rollback if we got an error here. We think it is better
             // to panic instead!
-            ZF_LOGF_IF(addrspace_add(asarr, as2) != AS_ADD_NOERR, "Error adding AS");
+            ZF_LOGF_IF(addrspace_add(asarr, as2, false, NULL) != AS_ADD_NOERR, "Error adding AS");
         }
     }
     

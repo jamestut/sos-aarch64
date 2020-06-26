@@ -40,8 +40,8 @@
 
 #define PAGE_SIZE_4K 0x1000
 
-#define MALLOC_SZ    1234
-#define MALLOC_TEST  4000
+#define MALLOC_SZ    20000
+#define MALLOC_TEST  20000
 
 char mymem[128];
 
@@ -70,10 +70,19 @@ int main(void)
     int msglen;
 
     int fh = open("console", O_RDWR);
-    write(fh, "Hello World!\n", 13);
+    int rs = write(fh, "Hello World!\n", 13);
+
+    rs = write(fh, NULL, 10);
+
+    char* testrw = mmap(NULL, 16384, PROT_WRITE | PROT_READ, MAP_ANON, 0, 0);
+    rs = write(fh, testrw + 10, 15);
+    assert(rs == -1);
+    strcpy(testrw + 4090, "Across page boundary!");
+    rs = write(fh, testrw + 4090, 21);
+
 
     msglen = sprintf(msgbuff, "Test malloc size = %d, actual = %d\n", MALLOC_SZ, MALLOC_TEST);
-    write(fh, msgbuff, msglen);
+    rs = write(fh, msgbuff, msglen);
 
     char* ptr = mmap(NULL, 16384, PROT_WRITE | PROT_READ, MAP_ANON, 0, 0);
     printf("ptr1: %p\n", ptr);
@@ -93,21 +102,31 @@ int main(void)
     puts("OK");
     ptr4[100000] = 'z';
     puts("OK");
-    ptr4[12000] = 'z';
-    puts("OK");
+    //ptr4[10000] = 'z';
 
+    printf("Big mmap\n");
+    char* bigmmap = mmap(NULL, 0xFFFFFFFF000, PROT_WRITE | PROT_READ, MAP_ANON, 0, 0);
+    printf("Big mmap addr = %p\n", bigmmap);
+    printf("Big mmap touching ...\n");
+    // touch some
+    bigmmap[0x12345] = 'A';
+    bigmmap[0x77777700] = 'B';
+    bigmmap[0xABCDEF1234] = 'C';
+    bigmmap[0x54321DEFAB] = 'D';
+    munmap(bigmmap, 0xFFFFFFFF000);
+    printf("Big mmap unmapped\n");
+    
+    strcpy(ptr4 + 100000, "console");
+    int fh2 = open(ptr4 + 100000, O_RDWR);
 
-    msglen = sprintf(msgbuff, "malloc ptr is = %p\n", ptr);
+    char* malloctgt = malloc(MALLOC_SZ);
+    msglen = sprintf(msgbuff, "malloc ptr is = %p\n", malloctgt);
     write(fh, msgbuff, msglen);
     msglen = sprintf(msgbuff, "test write\n");
     write(fh, msgbuff, msglen);
 
     for(int i=0; i<MALLOC_TEST; ++i) {
-        ptr[i] = 'A' + (i % 26);
-        if(i % PAGE_SIZE_4K == 0) {
-            //msglen = sprintf(msgbuff, "Wrote %d chars\n", i);
-            //write(fh, msgbuff, msglen);
-        }
+        malloctgt[i] = 'A' + (i % 26);
     }
 
     msglen = sprintf(msgbuff, "test read\n");
@@ -115,7 +134,7 @@ int main(void)
 
     bool haserr = false;
     for(int i=0; i<MALLOC_TEST; ++i) {
-        if(ptr[i] != ('A' + (i % 26))) {
+        if(malloctgt[i] != ('A' + (i % 26))) {
             msglen = sprintf(msgbuff, "Data error at item #%d\n", i);
             write(fh, msgbuff, msglen);
             haserr = true;
@@ -127,6 +146,11 @@ int main(void)
         msglen = sprintf(msgbuff, "test passed!\n");
         write(fh, msgbuff, msglen);
     }
+
+    msglen = sprintf(msgbuff, "Try long write to FH %d\n", fh2);
+    write(fh2, msgbuff, msglen);
+
+    rs = write(fh2, malloctgt, MALLOC_SZ);
     
     close(fh);
     while(1){}

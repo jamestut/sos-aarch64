@@ -40,8 +40,6 @@ bool vm_fault(seL4_MessageInfo_t* tag, seL4_Word badge, seL4_CPtr vspace, dynarr
     }
 
     // else, it should be a valid translation
-    // TODO: GRP01 bookkeep the allocated frame
-    // TODO: GRP01 support mmap
     frame_ref_t frame = alloc_frame();
     if(!frame) {
         ZF_LOGE("Cannot allocate a frame.");

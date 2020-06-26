@@ -2,14 +2,15 @@
 #include <utils/zf_log_if.h>
 #include <sync/bin_sem.h>
 #include <sync/condition_var.h>
+#include <grp01/dynaarray.h>
 
 #include "threads.h"
 #include "utils.h"
+#include "vm/mapping2.h"
 
 #include "bgworker.h"
 
 #define MAX_QUEUE 16
-#define HANDLERS 1
 
 struct be_item {
     bgworker_callback_fn fn;
@@ -60,10 +61,10 @@ void bgworker_init()
     sync_bin_sem_init(&cqueue.lock, ntfn_lck, 1);
     sync_cv_init(&cqueue.cv, ntfn_cv);
 
-    for(int i=0; i<HANDLERS; ++i) {
+    for(int i=0; i<BG_HANDLERS; ++i) {
         if(!thread_create(bgworker_loop, NULL, BACKEND_HANDLER_BADGE, true)) {
             ZF_LOGF("Cannot create backend handler thread (thread %d of %d).", 
-                i+1, HANDLERS);
+                i+1, BG_HANDLERS);
         }
     }
 }
@@ -94,7 +95,7 @@ bool bgworker_enqueue_callback(bgworker_callback_fn fn, void* args)
     return true;
 }
 
-void bgworker_loop(void* unused)
+void bgworker_loop(UNUSED void* unused)
 {
     // no shutdown condition here. we wait 4ever!
     while(1) {

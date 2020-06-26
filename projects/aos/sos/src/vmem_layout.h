@@ -20,7 +20,8 @@
  * Do not use the address range between SOS_DMA_VSTART and SOS_DMA_VEND */
 #define SOS_DMA_SIZE_BITS    (seL4_LargePageBits)
 
-#define SOS_SCRATCH          (0xA0000000)
+// scratch vaddr for SOS is ideally the topmost
+#define SOS_SCRATCH          (0x9000000000)
 #define SOS_DEVICE_START     (0xB0000000)
 #define SOS_STACK            (0xC0000000)
 #define SOS_IPC_BUFFER       (0xD0000000)

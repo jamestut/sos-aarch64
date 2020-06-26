@@ -24,8 +24,6 @@
 
 #include "sossysnr.h"
 
-#define UINT32_LIMIT 0x7FFFFFFF
-
 int sos_errno = 0;
 char debugstr[4096];
 
@@ -43,13 +41,11 @@ int sos_sys_open(const char *path, fmode_t mode)
         return -1;
     }
 
-    void* bigipc = sos_large_ipc_buffer();
-    memcpy(bigipc, path, len);
-
-    seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, 3);
+    seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, 4);
     seL4_SetMR(0, SOS_SYSCALL_OPEN);
-    seL4_SetMR(1, len);
-    seL4_SetMR(2, mode);
+    seL4_SetMR(1, path);
+    seL4_SetMR(2, len);
+    seL4_SetMR(3, mode);
 
     msginfo = seL4_Call(SOS_IPC_EP_CAP, msginfo);
 
@@ -150,58 +146,29 @@ int64_t sos_sys_time_stamp(void)
 
 int sos_sys_rw(bool read, int file, char *buf, size_t nbyte)
 {
-    // truncate, as we have to return in int (while nbyte could be 64 bit)
-    if(nbyte > UINT32_LIMIT)
-        nbyte = UINT32_LIMIT;
+    // truncate, as we have to return in signed int (while nbyte could be 64 bit)
+    if(nbyte > INT32_MAX)
+        nbyte = INT32_MAX;
 
-    void* bigipc = sos_large_ipc_buffer();
-
-    seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, 3);
+    seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, 4);
     seL4_MessageInfo_t retinfo;
 
     size_t rd = 0;
 
-    while(rd < nbyte) {
-        size_t numrd = MIN(nbyte - rd, MAX_IO_BUF);
-        
-        // write operation: copy from source to ipc
-        if(!read) {
-            memcpy(bigipc, buf, numrd);
-            // advance position
-            buf += numrd;
-        }
+    seL4_SetMR(0, read ? SOS_SYSCALL_READ : SOS_SYSCALL_WRITE);
+    seL4_SetMR(1, file);
+    seL4_SetMR(2, buf);
+    seL4_SetMR(3, nbyte);
+    retinfo = seL4_Call(SOS_IPC_EP_CAP, msginfo);
 
-        // syscall
-        seL4_SetMR(0, read ? SOS_SYSCALL_READ : SOS_SYSCALL_WRITE);
-        seL4_SetMR(1, file);
-        seL4_SetMR(2, numrd);
-        retinfo = seL4_Call(SOS_IPC_EP_CAP, msginfo);
-        
-        ssize_t ret = seL4_GetMR(0);
-        if(ret < 0) {
-            sos_errno = ret * -1;
-            return -1;
-        } else {
-            // read operation: copy from ipc to buf
-            if(read) {
-                memcpy(buf, bigipc, ret);
-                buf += ret;
-            }
-
-            rd += ret;
-            // if SOS indicated that it does less than we want, we reached EOF.
-            // stop now!
-            if(ret < numrd)
-                break;
-        }
-    }
+    ssize_t ret = seL4_GetMR(0);
+    if(ret < 0) {
+        sos_errno = ret * -1;
+        return -1;
+    } else
+        return ret;
     
     return rd;
-}
-
-void* sos_large_ipc_buffer(void)
-{
-    return (void*)((uintptr_t)seL4_GetIPCBuffer() + MAX_IO_BUF);
 }
 
 size_t sos_grow_stack(size_t pages)

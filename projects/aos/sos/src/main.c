@@ -30,6 +30,8 @@
 #include <sel4runtime.h>
 #include <sel4runtime/auxv.h>
 
+#include <sync/mutex.h>
+
 #include <sossysnr.h>
 
 #include "bootstrap.h"
@@ -83,7 +85,7 @@
 
 /* The number of additional stack pages to provide to the initial
  * process */
-#define INITIAL_PROCESS_EXTRA_STACK_PAGES 16
+#define INITIAL_PROCESS_EXTRA_STACK_PAGES 4
 
 /*
  * A dummy starting syscall
@@ -100,6 +102,11 @@ extern void (__register_frame)(void *);
 
 /* root tasks cspace */
 cspace_t cspace;
+
+/* scratch address space */
+dynarray_t scratchas;
+// lock for both scratchas itself and when mapping/unmapping
+sync_mutex_t scratch_lock;
 
 static seL4_CPtr sched_ctrl_start;
 static seL4_CPtr sched_ctrl_end;
@@ -154,14 +161,8 @@ void handle_syscall(seL4_Word badge, seL4_CPtr reply, ut_t* reply_ut)
     /* Process system call */
     switch (syscall_number) {
     case SOS_SYSCALL_OPEN:
-        // hard limit for string values
-        if(seL4_GetMR(1) >= PAGE_SIZE_4K)
-            handler_ret = ENAMETOOLONG * -1;
-        else {
-            char * fn = frame_data(pt->ipc_buffer2_frame);
-            fn[seL4_GetMR(1)] = 0;
-            handler_ret = fileman_open(badge, reply, reply_ut, fn, seL4_GetMR(2));
-        }
+        handler_ret = fileman_open(badge, pt->vspace, reply, reply_ut, 
+            seL4_GetMR(1), seL4_GetMR(2), seL4_GetMR(3));
         break;
     
     case SOS_SYSCALL_CLOSE:
@@ -169,19 +170,13 @@ void handle_syscall(seL4_Word badge, seL4_CPtr reply, ut_t* reply_ut)
         break;
     
     case SOS_SYSCALL_READ:
-        if(seL4_GetMR(1) >= PAGE_SIZE_4K)
-            handler_ret = EMSGSIZE * -1;
-        else
-            handler_ret = fileman_read(badge, seL4_GetMR(1), reply, reply_ut, 
-                frame_data(pt->ipc_buffer2_frame), seL4_GetMR(2));
+        handler_ret = fileman_read(badge, pt->vspace, seL4_GetMR(1), reply, reply_ut, 
+            seL4_GetMR(2), seL4_GetMR(3));
         break;
 
-    case SOS_SYSCALL_WRITE:
-        if(seL4_GetMR(1) >= PAGE_SIZE_4K)
-            handler_ret = EMSGSIZE * -1;
-        else 
-            handler_ret = fileman_write(badge, seL4_GetMR(1), reply, reply_ut, 
-                frame_data(pt->ipc_buffer2_frame), seL4_GetMR(2));
+    case SOS_SYSCALL_WRITE: 
+        handler_ret = fileman_write(badge, pt->vspace, seL4_GetMR(1), reply, reply_ut, 
+            seL4_GetMR(2), seL4_GetMR(3));
         break;
 
     case SOS_SYSCALL_MMAP:
@@ -189,8 +184,16 @@ void handle_syscall(seL4_Word badge, seL4_CPtr reply, ut_t* reply_ut)
             seL4_GetMR(4), seL4_GetMR(5), seL4_GetMR(6));
         break;
 
+    case SOS_SYSCALL_MUNMAP:
+        handler_ret = handle_munmap(&pt->as, badge, pt->vspace, seL4_GetMR(1), seL4_GetMR(2));
+        break;
+
     case SOS_SYSCALL_BRK:
         handler_ret = handle_brk(&pt->as, seL4_GetMR(1));
+        break;
+
+    case SOS_SYSCALL_GROW_STACK:
+        handler_ret = handle_grow_stack(&pt->as, seL4_GetMR(1));
         break;
 
     case SOS_SYSCALL_USLEEP:
@@ -323,7 +326,7 @@ static int stack_write(seL4_Word *mapped_stack, int index, uintptr_t val)
 
 /* set up System V ABI compliant stack, so that the process can
  * start up and initialise the C library */
-static uintptr_t init_process_stack(seL4_Word badge, cspace_t *cspace, seL4_CPtr local_vspace, elf_t *elf_file)
+static uintptr_t init_process_stack(seL4_Word badge, elf_t *elf_file)
 {
     // we assume that caller give the sane badge value here!
     proctable_t* pt = proctable + badge;
@@ -333,10 +336,10 @@ static uintptr_t init_process_stack(seL4_Word badge, cspace_t *cspace, seL4_CPtr
     stackas.end = PROCESS_STACK_TOP;
     stackas.begin = PROCESS_STACK_TOP - INITIAL_PROCESS_EXTRA_STACK_PAGES * PAGE_SIZE_4K;
     stackas.perm = seL4_CapRights_new(false, false, true, true);
-    stackas.attr.type = AS_NORMAL;
+    stackas.attr.type = AS_STACK;
 
     // map this stack region to process' address space
-    if(addrspace_add(&pt->as, stackas) != AS_ADD_NOERR) {
+    if(addrspace_add(&pt->as, stackas, false, NULL) != AS_ADD_NOERR) {
         ZF_LOGE("Error adding stack address space region to process.");
         return 0;
     }
@@ -552,7 +555,7 @@ bool start_first_process(char *app_name, seL4_CPtr ep)
     }
 
     /* set up the stack */
-    seL4_Word sp = init_process_stack(TTY_EP_BADGE, &cspace, seL4_CapInitThreadVSpace, &elf_file);
+    seL4_Word sp = init_process_stack(TTY_EP_BADGE, &elf_file);
 
     /* load the elf image from the cpio file */
     // also pass the address space region dynamic array
@@ -658,6 +661,19 @@ void init_muslc(void)
     muslcsys_install_syscall(__NR_madvise, sys_madvise);
 }
 
+void scratchas_init(void)
+{
+    // preallocate scratchas w/ the size of background worker threads, so that we don't have to depend on
+    // the thread safety of malloc
+    dynarray_init(&scratchas, sizeof(addrspace_t));
+    ZF_LOGF_IF(!dynarray_resize(&scratchas, BG_HANDLERS + 1), "Cannot allocate array for scratch address space.");
+    // lock for scratch space
+    seL4_CPtr ntfn;
+    ut_t* ntfn_ut = alloc_retype(&ntfn, seL4_NotificationObject, seL4_NotificationBits);
+    ZF_LOGF_IF(!ntfn_ut, "Cannot allocate notification object for scratch locker.");
+    sync_mutex_init(&scratch_lock, ntfn);
+}
+
 NORETURN void *main_continued(UNUSED void *arg)
 {
     /* Initialise other system compenents here */
@@ -673,9 +689,11 @@ NORETURN void *main_continued(UNUSED void *arg)
     frame_table_init(&cspace, seL4_CapInitThreadVSpace);
 
     // GRP01: init OS parts here
+    scratchas_init();
     fileman_init();
     grp01_map_bookkeep_init();
     memset(proctable, 0, sizeof(proctable));
+    ZF_LOGF_IF(!grp01_map_init(0, seL4_CapInitThreadVSpace), "Cannot init bookkepping for SOS frame map");
 
     /* run sos initialisation tests */
     run_tests(&cspace);

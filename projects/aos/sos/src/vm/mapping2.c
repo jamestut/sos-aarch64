@@ -6,9 +6,10 @@
 // these code will only work on AArch64 and nothing else!
 
 #include "mapping2.h"
+#include "addrspace.h"
 #include "../frame_table.h"
 #include "../utils.h"
-#include "../grp01.h"
+#include "../vmem_layout.h"
 #include <sync/mutex.h>
 #include <sys/types.h>
 #include <utils/zf_log_if.h>
@@ -35,14 +36,14 @@ typedef enum {
 
 // index to page table. use PDType above for type param.
 // AArch64 has 48 bits of vaddr, not 64 bit
-#define PD_INDEX_1(vaddr, type) \
+#define PD_INDEX(vaddr, type) \
     ({ uintptr_t _vaddr = (vaddr); \
        size_t _type = (type); \
        (_vaddr >> (12 + _type * 9)) & 0x1FF; })
 
 // ---- local functions section ----
-// DEBUG
-size_t PD_INDEX(uintptr_t vaddr, size_t type) {return PD_INDEX_1(vaddr, type);}
+// for debugging
+size_t PD_INDEX_MACROEXP(uintptr_t vaddr, size_t type) {return PD_INDEX(vaddr, type);}
 
 #define PD_ENTRY(pd, idx) \
     (((struct pagedir*)frame_data((pd).dir))[(idx)])
@@ -75,6 +76,9 @@ struct bookkeeping {
 // we won't need lock for this structure because we are event based
 struct bookkeeping bk[MAX_PID];
 
+extern dynarray_t scratchas;
+extern sync_mutex_t scratch_lock;
+
 void grp01_map_bookkeep_init()
 {
     memset(bk, 0, sizeof(bk));
@@ -100,6 +104,10 @@ bool grp01_map_init(seL4_Word badge, seL4_CPtr vspace)
 seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_frame_on_delete, seL4_CPtr vspace, seL4_Word vaddr, seL4_CapRights_t rights,
                      seL4_ARM_VMAttributes attr)
 {
+    // simply refuse to map NULL
+    if(!vaddr)
+        return seL4_IllegalOperation;
+
     if(badge >= MAX_PID || !vspace)
         return seL4_RangeError;
 
@@ -306,6 +314,7 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_CPtr vspace, seL4_Word vaddrb
     seL4_CPtr* frcap;
 
     while(numpages) { // PGD
+        ZF_LOGF_IF(indices[PT_PGD] >= 512, "vaddr out of bound");
         pud = PD_ENTRY(lbk->sh_pgd, indices[PT_PGD]);
         if(pud.dir) {
             while(numpages) { // PUD
@@ -315,7 +324,7 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_CPtr vspace, seL4_Word vaddrb
                         pt = PD_ENTRY(pd, indices[PT_PD]);
                         if(pt.dir) {
                             ZF_LOGF_IF(!pt.cap, "Page table has frame table but no capability table");
-                            while(numpages--) { // PT
+                            while(numpages) { // PT
                                 fr = ((frame_ref_t*)frame_data(pt.dir)) + indices[PT_PT];
                                 if(*fr) {
                                     // the actual unmapping
@@ -332,6 +341,7 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_CPtr vspace, seL4_Word vaddrb
                                     // zero out the PT
                                     *fr = *frcap = 0;
                                 }
+                                --numpages;
                                 if(++indices[PT_PT] >= 512) {
                                     indices[PT_PT] = 0;
                                     break;
@@ -362,8 +372,7 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_CPtr vspace, seL4_Word vaddrb
             numpages = MAX(0, numpages - (512 - (indices[PT_PUD] + 1)) * 512*512);
             indices[PT_PT] = indices[PT_PD] = indices[PT_PUD] = 0;
         }
-        if(++indices[PT_PGD] >= 512) 
-            ZF_LOGF("PGD index out of bound!");
+        ++indices[PT_PGD];
     }
     return seL4_NoError;
 }
@@ -385,4 +394,154 @@ frame_ref_t grp01_get_frame(seL4_Word badge, seL4_CPtr vspace, seL4_Word vaddr)
     }
 
     return ((frame_ref_t*)frame_data(ppd->dir))[PD_INDEX(vaddr, PT_PT)] & FR_FLAG_REF_AREA;
+}
+
+void* userptr_read(userptr_t src, size_t len, seL4_Word badge, seL4_CPtr vspace)
+{
+    // the usual checking
+    if(badge >= MAX_PID || !vspace)
+        return 0;
+    struct bookkeeping* userbk = bk + badge;
+    if(userbk->vspace != vspace)
+        return 0;
+
+    uintptr_t ret = 0;
+
+    // net length!
+    size_t lennet = len + (src % PAGE_SIZE_4K);
+    size_t pagecount = ROUND_UP(lennet - 1, PAGE_SIZE_4K) / PAGE_SIZE_4K;
+    
+    // check if we have enough scratch vmem to handle this
+    sync_mutex_lock(&scratch_lock);
+    if(scratchas.used == 0) {
+        // check if our entire addrspace can be used to fit this request!
+        if(lennet < (VMEM_TOP - SOS_SCRATCH))
+            ret = SOS_SCRATCH;
+    } else {
+        // find an empty region, starting from rearmost!
+        for(int i = scratchas.used - 1; i >= 0; --i) {
+            uintptr_t scregend = ((addrspace_t*)scratchas.data)[i].end;
+            if(lennet < (VMEM_TOP - scregend)) {
+                ret = scregend;
+                break;
+            }
+        }
+    }
+    // our code is designed not to invoke malloc again on scratch space, so ...
+    ZF_LOGF_IF(scratchas.used + 1 >= scratchas.capacity, 
+        "Request is going to exceed scratch AS slot.");
+
+    // create the AS
+    addrspace_t curras;
+    uint32_t currasidx;
+    if(ret) {
+        curras.attr.type = AS_NORMAL;
+        // we set write to true, as sometimes we also need to ensure the NULL terminator.
+        curras.perm = seL4_CapRights_new(false, false, true, true);
+        curras.begin = ret;
+        curras.end = ret + pagecount * PAGE_SIZE_4K;
+        // this ensures that other thread can't touch our scratch region
+        if(addrspace_add(&scratchas, curras, false, &currasidx) != AS_ADD_NOERR) {
+            ZF_LOGE("Cannot map scratch address space.");
+            ret = 0;
+        }
+    }
+    sync_mutex_unlock(&scratch_lock);
+
+    if(!ret)
+        return NULL;
+
+    // map all user pages to the scratch addr space
+    uint16_t indices[4];
+    for(int i = PT_PT; i <= PT_PGD; ++i)
+        indices[i] = PD_INDEX(src, i);
+    struct pagedir pud, pd, pt;
+    frame_ref_t fr;
+    uintptr_t scratchvaddr = ret;
+
+    bool allpagesmapped = true;
+    while(pagecount) { // PGD
+        ZF_LOGF_IF(indices[PT_PGD] >= 512, "vaddr out of bound");
+        pud = PD_ENTRY(userbk->sh_pgd, indices[PT_PGD]);
+        if(pud.dir) {
+            while(pagecount) { // PUD
+                pd = PD_ENTRY(pud, indices[PT_PUD]);
+                if(pd.dir) {
+                    while(pagecount) { // PD
+                        pt = PD_ENTRY(pd, indices[PT_PD]);
+                        if(pt.dir) {
+                            ZF_LOGF_IF(!pt.cap, "Page table has frame table but no capability table");
+                            while(pagecount) { // PT
+                                fr = ((frame_ref_t*)frame_data(pt.dir))[indices[PT_PT]] & FR_FLAG_REF_AREA;
+                                if(!fr) {
+                                    allpagesmapped = false;
+                                    break;
+                                }
+                                if(grp01_map_frame(0, fr, false, bk->vspace, scratchvaddr, 
+                                    curras.perm, seL4_ARM_Default_VMAttributes) != seL4_NoError)
+                                        allpagesmapped = false;
+                                scratchvaddr += PAGE_SIZE_4K;
+                                // next
+                                --pagecount;
+                                if(++indices[PT_PT] >= 512) {
+                                    indices[PT_PT] = 0;
+                                    break;
+                                }
+                            }
+                        } else
+                            allpagesmapped = false;
+                        if(!allpagesmapped)
+                            break;
+                        // next
+                        if(++indices[PT_PD] >= 512) {
+                            indices[PT_PD] = 0;
+                            break;
+                        }
+                    }
+                } else
+                    allpagesmapped = false;
+                if(!allpagesmapped)
+                    break;
+                // next
+                if(++indices[PT_PUD] >= 512) {
+                    indices[PT_PUD] = 0;
+                    break;
+                }
+            }
+        } else
+            allpagesmapped = false;
+        if(!allpagesmapped)
+            break;
+        ++indices[PT_PGD];
+    }
+    // there is no point in continuing the reading if not all pages are mapped.
+    // we expect that pages are already mapped and init-ed when user wishes us to read it
+    if(!allpagesmapped) {
+        ZF_LOGI("User app requested read on unmapped frames.");
+        // unmap from our AS
+        ZF_LOGF_IF(grp01_unmap_frame(0, bk->vspace, curras.begin, curras.end) != seL4_NoError, 
+            "Error unmapping scratch frame");
+        // and remove the AS
+        sync_mutex_lock(&scratch_lock);
+        addrspace_remove(&scratchas, currasidx);
+        sync_mutex_unlock(&scratch_lock);
+        return 0;
+    }
+
+    // offset the ret
+    ret += src % PAGE_SIZE_4K;
+    return (void*)ret;
+}
+
+void userptr_unmap(void* sosaddr)
+{
+    sync_mutex_lock(&scratch_lock);
+    int idx = addrspace_find(&scratchas, (uintptr_t)sosaddr);
+    if(idx >= 0) {
+        addrspace_t* as = (addrspace_t*)scratchas.data + idx;
+        ZF_LOGF_IF(grp01_unmap_frame(0, bk->vspace, as->begin, as->end),
+            "Error unmapping scratch frame");
+        addrspace_remove(&scratchas, idx);
+    }
+    sync_mutex_unlock(&scratch_lock);
 }

@@ -16,7 +16,7 @@ int comp_vaddr(const void* a, const void* b);
 // compare given address space and another address space. 0 if overlaps.
 int comp_as(const void* a, const void* b);
 
-addrspace_add_errors addrspace_add(dynarray_t* arr, addrspace_t as)
+addrspace_add_errors addrspace_add(dynarray_t* arr, addrspace_t as, bool allowoverlap, uint32_t* index)
 {
     if(as.end <= as.begin)
         return AS_ADD_INVALIDARG;
@@ -32,6 +32,8 @@ addrspace_add_errors addrspace_add(dynarray_t* arr, addrspace_t as)
         overlap = comp_as(&as, aslist + pos) == 0;
 
     if(overlap) {
+        if(!allowoverlap)
+            return AS_ADD_CLASH;
         // check permission and attribute
         if(memcmp(&as.perm, &aslist[pos].perm, sizeof(seL4_CapRights_t)) || 
             memcmp(&as.attr, &aslist[pos].perm, sizeof(struct addrspace_attr)))
@@ -66,7 +68,10 @@ addrspace_add_errors addrspace_add(dynarray_t* arr, addrspace_t as)
         aslist[pos] = as;
         ++arr->used;
     }
+
     // success
+    if(index)
+        *index = pos;
     return AS_ADD_NOERR;
 }
 

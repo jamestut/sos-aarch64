@@ -4,6 +4,7 @@
 #include <sel4/sel4.h>
 #include <cspace/cspace.h>
 #include "../frame_table.h"
+#include "../grp01.h"
 
 // initialize mapping with bookkeeping
 void grp01_map_bookkeep_init(void);
@@ -27,3 +28,8 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_CPtr vspace, seL4_Word vaddrb
 
 // @return 0 on lookup failure (e.g. wrong region / unmapped frame)
 frame_ref_t grp01_get_frame(seL4_Word badge, seL4_CPtr vspace, seL4_Word vaddr);
+
+// @return 0 on failure, or pointer to the beginning of the buffer on success
+void* userptr_read(userptr_t src, size_t len, seL4_Word badge, seL4_CPtr vspace);
+
+void userptr_unmap(void* sosaddr);
