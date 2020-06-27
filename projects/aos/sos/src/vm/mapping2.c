@@ -295,8 +295,14 @@ seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_fram
     return err;
 }
 
-seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_CPtr vspace, seL4_Word vaddrbegin, seL4_Word vaddrend)
+seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_CPtr vspace, seL4_Word vaddrbegin, seL4_Word vaddrend, bool full)
 {
+    // if full is turned on, we will completely obliviate all the intermediary pages from bottom to top!
+    if(full) {
+        vaddrbegin = 0;
+        vaddrend = VMEM_TOP;
+    }
+
     // must pass a page aligned address here!
     ZF_LOGF_IF((vaddrbegin % PAGE_SIZE_4K) || (vaddrend % PAGE_SIZE_4K), "vaddr not page aligned");
     if(vaddrend < vaddrbegin)
@@ -354,6 +360,23 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_CPtr vspace, seL4_Word vaddrb
                                     break;
                                 }
                             }
+                            if(full) {
+                                // free this PT's frame data
+                                free_frame(pt.dir);
+                                free_frame(pt.cap);
+                                // unmap this PT and free the UT
+                                if(pd.cap) {
+                                    ZF_LOGF_IF(!pd.ut, "shadow PD has cap frame but no ut frame.");
+                                    seL4_CPtr ptcap = ((seL4_CPtr*)frame_data(pd.cap))[indices[PT_PD]];
+                                    if(ptcap) {
+                                        ZF_LOGF_IF(seL4_ARM_PageTable_Unmap(ptcap) != seL4_NoError, 
+                                            "Error unmapping PT");
+                                        cspace_delete(&cspace, ptcap);
+                                        cspace_free_slot(&cspace, ptcap);
+                                        ut_free(((ut_t**)frame_data(pd.ut))[indices[PT_PD]]);
+                                    }
+                                }
+                            }
                         } else {
                             numpages = MAX(0, numpages - (512 - indices[PT_PT]));
                             indices[PT_PT] = 0;
@@ -361,6 +384,26 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_CPtr vspace, seL4_Word vaddrb
                         if(++indices[PT_PD] >= 512) {
                             indices[PT_PD] = 0;
                             break;
+                        }
+                    }
+                    if(full) {
+                        // free this PD's frame data
+                        free_frame(pd.dir);
+                        if(pd.cap)
+                            free_frame(pd.cap);
+                        if(pd.ut)
+                            free_frame(pd.ut);
+                        // unmap this PD and free the UT
+                        if(pud.cap) {
+                            ZF_LOGF_IF(!pud.ut, "shadow PUD has cap frame but no ut frame.");
+                            seL4_CPtr pdcap = ((seL4_CPtr*)frame_data(pud.cap))[indices[PT_PUD]];
+                            if(pdcap) {
+                                ZF_LOGF_IF(seL4_ARM_PageDirectory_Unmap(pdcap) != seL4_NoError, 
+                                    "Error unmapping PD");
+                                cspace_delete(&cspace, pdcap);
+                                cspace_free_slot(&cspace, pdcap);
+                                ut_free(((ut_t**)frame_data(pud.ut))[indices[PT_PUD]]);
+                            }
                         }
                     }
                 } else {
@@ -373,6 +416,26 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_CPtr vspace, seL4_Word vaddrb
                     break;
                 }
             }
+            if(full) {
+                // free this PUD's frame data
+                free_frame(pud.dir);
+                if(pud.cap)
+                    free_frame(pud.cap);
+                if(pud.ut)
+                    free_frame(pud.ut);
+                // unmap this PD and free the UT
+                if(lbk->sh_pgd.cap) {
+                    ZF_LOGF_IF(!lbk->sh_pgd.ut, "shadow PGD has cap frame but no ut frame.");
+                    seL4_CPtr pudcap = ((seL4_CPtr*)frame_data(lbk->sh_pgd.cap))[indices[PT_PGD]];
+                    if(pudcap) {
+                        ZF_LOGF_IF(seL4_ARM_PageUpperDirectory_Unmap(pudcap) != seL4_NoError, 
+                            "Error unmapping PUD");
+                        cspace_delete(&cspace, pudcap);
+                        cspace_free_slot(&cspace, pudcap);
+                        ut_free(((ut_t**)frame_data(lbk->sh_pgd.ut))[indices[PT_PGD]]);
+                    }
+                }
+            }
         } else {
             numpages = MAX(0, numpages - (512 - indices[PT_PT]));
             numpages = MAX(0, numpages - (512 - (indices[PT_PD] + 1)) * 512);
@@ -381,6 +444,18 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_CPtr vspace, seL4_Word vaddrb
         }
         ++indices[PT_PGD];
     }
+
+    // free the PGD and unmap it
+    // (however, let the caller unmap the PGD and free its cspace instead)
+    if(full) {
+        if(lbk->sh_pgd.dir)
+            free_frame(lbk->sh_pgd.dir);
+        if(lbk->sh_pgd.cap)
+            free_frame(lbk->sh_pgd.cap);
+        if(lbk->sh_pgd.ut)
+            free_frame(lbk->sh_pgd.ut);
+    }
+
     return seL4_NoError;
 }
 
@@ -525,7 +600,7 @@ void* userptr_read(userptr_t src, size_t len, seL4_Word badge, seL4_CPtr vspace)
     if(!allpagesmapped) {
         ZF_LOGI("User app requested read on unmapped frames.");
         // unmap from our AS
-        ZF_LOGF_IF(grp01_unmap_frame(0, bk->vspace, curras.begin, curras.end) != seL4_NoError, 
+        ZF_LOGF_IF(grp01_unmap_frame(0, bk->vspace, curras.begin, curras.end, false) != seL4_NoError, 
             "Error unmapping scratch frame");
         // and remove the AS
         sync_mutex_lock(&scratch_lock);
@@ -642,7 +717,7 @@ bool userptr_write_next(userptr_write_state_t* it)
     if(it->curr) {
         // unmap SOS scratch frame
         it->curr = ROUND_DOWN(it->curr, PAGE_SIZE_4K);
-        if(grp01_unmap_frame(0, bk->vspace, it->curr, it->curr + PAGE_SIZE_4K) != seL4_NoError) {
+        if(grp01_unmap_frame(0, bk->vspace, it->curr, it->curr + PAGE_SIZE_4K, false) != seL4_NoError) {
             ZF_LOGE("Error unmapping scratch frame.");
             return false;
         }
@@ -677,7 +752,7 @@ void userptr_unmap(void* sosaddr)
     int idx = addrspace_find(&scratchas, (uintptr_t)sosaddr);
     if(idx >= 0) {
         addrspace_t* as = (addrspace_t*)scratchas.data + idx;
-        ZF_LOGF_IF(grp01_unmap_frame(0, bk->vspace, as->begin, as->end),
+        ZF_LOGF_IF(grp01_unmap_frame(0, bk->vspace, as->begin, as->end, false),
             "Error unmapping scratch frame");
         addrspace_remove(&scratchas, idx);
     }

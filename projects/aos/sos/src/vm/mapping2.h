@@ -50,7 +50,9 @@ seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_fram
 // unmap a virtual address range from vspace.
 // @param vaddrbegin page-aligned beginning of the frame to unmap
 // @param vaddrend   page-aligned end of the frame to unmap, exclusive
-seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_CPtr vspace, seL4_Word vaddrbegin, seL4_Word vaddrend);
+// @param full       if true, all touched intermediary pages and shadow tables associated with the vspace
+//                   will be torn off.
+seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_CPtr vspace, seL4_Word vaddrbegin, seL4_Word vaddrend, bool full);
 
 // @return 0 on lookup failure (e.g. wrong region / unmapped frame)
 frame_ref_t grp01_get_frame(seL4_Word badge, seL4_CPtr vspace, seL4_Word vaddr);
