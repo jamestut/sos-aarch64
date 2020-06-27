@@ -17,7 +17,7 @@
 #include <sel4/sel4.h>
 
 /* top level cspace node size, for the root cnode, in bits, where size = 2^bits */
-#define INITIAL_TASK_CNODE_SIZE_BITS 18u
+#define INITIAL_TASK_CNODE_SIZE_BITS 21u
 #define INITIAL_TASK_CSPACE_BITS (CNODE_SLOT_BITS(INITIAL_TASK_CNODE_SIZE_BITS) + \
                                   CNODE_SLOT_BITS(CNODE_SIZE_BITS))
 #define INITIAL_TASK_CSPACE_SLOTS BIT(INITIAL_TASK_CSPACE_BITS)
