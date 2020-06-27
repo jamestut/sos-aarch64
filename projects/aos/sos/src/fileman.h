@@ -4,6 +4,7 @@
 #include <cspace/cspace.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <grp01/dynaarray.h>
 
 #include "grp01.h"
 #include "ut.h"
@@ -51,10 +52,10 @@ int fileman_close(seL4_Word pid, seL4_CPtr reply, ut_t* reply_ut, int fh);
 // @return errno if failed, 0 if pending.
 //         Result will be replied directly to the client once finishes,
 //         using negative errno semantic.
-int fileman_write(seL4_Word pid, seL4_CPtr vspace, int fh, seL4_CPtr reply, ut_t* reply_ut, userptr_t buff, uint32_t len);
+int fileman_write(seL4_Word pid, seL4_CPtr vspace, int fh, seL4_CPtr reply, ut_t* reply_ut, userptr_t buff, uint32_t len, dynarray_t* userasarr);
 
 // read to buffer from the underlying file system
 // @return errno if failed, 0 if pending.
 //         Result will be replied directly to the client once finishes,
 //         using negative errno semantic.
-int fileman_read(seL4_Word pid, seL4_CPtr vspace, int fh, seL4_CPtr reply, ut_t* reply_ut, userptr_t buff, uint32_t len);
+int fileman_read(seL4_Word pid, seL4_CPtr vspace, int fh, seL4_CPtr reply, ut_t* reply_ut, userptr_t buff, uint32_t len, dynarray_t* userasarr);

@@ -68,6 +68,7 @@ struct bg_open_param {
 struct bg_rw_param {
     bool read; //false = write
     userptr_t buff;
+    dynarray_t* userasarr;
     uint32_t len;
     seL4_Word pid;
     seL4_CPtr vspace;
@@ -92,9 +93,9 @@ void send_and_free_reply_cap(ssize_t response, seL4_CPtr reply, ut_t* reply_ut);
 void bg_fileman_open(void* data);
 void bg_fileman_rw(void* data);
 void bg_fileman_close(void* data);
-int fileman_rw_dispatch(bool read, seL4_Word pid, seL4_CPtr vspace, int fh, seL4_CPtr reply, ut_t* reply_ut, userptr_t buff, uint32_t len);
+int fileman_rw_dispatch(bool read, seL4_Word pid, seL4_CPtr vspace, int fh, seL4_CPtr reply, ut_t* reply_ut, userptr_t buff, uint32_t len, dynarray_t* userasarr);
 ssize_t fileman_write_broker(struct filehandler* fh, int id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len);
-ssize_t fileman_read_broker(struct filehandler* fh, int id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len);
+ssize_t fileman_read_broker(dynarray_t* userasarr, struct filehandler* fh, int id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len);
 
 // function definitions area
 
@@ -196,17 +197,17 @@ int fileman_close(seL4_Word pid, seL4_CPtr reply, ut_t* reply_ut, int fh)
     return 0;
 }
 
-int fileman_write(seL4_Word pid, seL4_CPtr vspace, int fh, seL4_CPtr reply, ut_t* reply_ut, userptr_t buff, uint32_t len)
+int fileman_write(seL4_Word pid, seL4_CPtr vspace, int fh, seL4_CPtr reply, ut_t* reply_ut, userptr_t buff, uint32_t len, dynarray_t* userasarr)
 {
-    return fileman_rw_dispatch(false, pid, vspace, fh, reply, reply_ut, buff, len);
+    return fileman_rw_dispatch(false, pid, vspace, fh, reply, reply_ut, buff, len, userasarr);
 }
 
-int fileman_read(seL4_Word pid, seL4_CPtr vspace, int fh, seL4_CPtr reply, ut_t* reply_ut, userptr_t buff, uint32_t len)
+int fileman_read(seL4_Word pid, seL4_CPtr vspace, int fh, seL4_CPtr reply, ut_t* reply_ut, userptr_t buff, uint32_t len, dynarray_t* userasarr)
 {
-    return fileman_rw_dispatch(true, pid, vspace, fh, reply, reply_ut, buff, len);
+    return fileman_rw_dispatch(true, pid, vspace, fh, reply, reply_ut, buff, len, userasarr);
 }
 
-int fileman_rw_dispatch(bool read, seL4_Word pid, seL4_CPtr vspace, int fh, seL4_CPtr reply, ut_t* reply_ut, userptr_t buff, uint32_t len)
+int fileman_rw_dispatch(bool read, seL4_Word pid, seL4_CPtr vspace, int fh, seL4_CPtr reply, ut_t* reply_ut, userptr_t buff, uint32_t len, dynarray_t* userasarr)
 {
     // error checking
     // bad pid
@@ -229,6 +230,7 @@ int fileman_rw_dispatch(bool read, seL4_Word pid, seL4_CPtr vspace, int fh, seL4
     param->len = len;
     param->reply = reply;
     param->reply_ut = reply_ut;
+    param->userasarr = userasarr;
 
     bgworker_enqueue_callback(bg_fileman_rw, param);
     return 0;
@@ -347,7 +349,7 @@ void bg_fileman_rw(void* data)
 
     // action!
     if(param->read)
-        ret = fileman_read_broker(pfe->handler, pfe->id, param->buff, param->pid, param->vspace, param->len);
+        ret = fileman_read_broker(param->userasarr, pfe->handler, pfe->id, param->buff, param->pid, param->vspace, param->len);
     else
         ret = fileman_write_broker(pfe->handler, pfe->id, param->buff, param->pid, param->vspace, param->len);
 
@@ -388,7 +390,38 @@ ssize_t fileman_write_broker(struct filehandler* fh, int id, userptr_t ptr, seL4
     return ret;
 }
 
-ssize_t fileman_read_broker(struct filehandler* fh, int id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len)
+ssize_t fileman_read_broker(dynarray_t* userasarr, struct filehandler* fh, int id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len)
 {
-    ZF_LOGF("read M3 not implemented!");
+    if(!len)
+        return 0;
+
+    userptr_write_state_t it = userptr_write_start(ptr, len, userasarr, badge, vspace);
+    if(!it.curr)
+        return -EFAULT;
+    
+    ssize_t ret = 0;
+    void* startptr = it.curr;
+
+    while(it.curr) {
+        ssize_t rd = fh->read(id, (void*)it.curr, it.remcurr);
+        if(rd < 0) {
+            ZF_LOGE("Filesystem returned an error");
+            ret = -EIO;
+            break;
+        }
+        ret += rd;
+        if (rd < it.remcurr)
+            // EOF!
+            break;
+        
+        if(!userptr_write_next(&it)) {
+            ZF_LOGE("Error incrementing pointer when handling user read request.");
+            ret = -EIO;
+            break;
+        }
+    }
+
+    userptr_unmap(startptr);
+    
+    return ret;
 }

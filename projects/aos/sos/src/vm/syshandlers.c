@@ -184,7 +184,7 @@ ssize_t handle_munmap(dynarray_t* asarr, seL4_Word badge, seL4_CPtr vspace,
     return 1;
 }
 
-ssize_t handle_grow_stack(dynarray_t* asarr, size_t bypage)
+ssize_t handle_grow_stack(dynarray_t* asarr, seL4_Word badge, seL4_CPtr vspace, size_t bypage)
 {
     // find the stack by looking the vaddr of the bottom of the 1st page
     uintptr_t vaddr = PROCESS_STACK_TOP - PAGE_SIZE_4K;
@@ -220,7 +220,12 @@ ssize_t handle_grow_stack(dynarray_t* asarr, size_t bypage)
     if (numpages > PROCESS_STACK_MAX_PAGES)
         numpages = PROCESS_STACK_MAX_PAGES;
     
-    // enlarge
-    stackas->begin = stackas->end - (numpages << seL4_PageBits);
+    // resize
+    newbegin = stackas->end - (numpages << seL4_PageBits);
+    if(newbegin > stackas->begin) {
+        // shrink!
+        grp01_unmap_frame(badge, vspace, stackas->begin, newbegin);
+    }
+    stackas->begin = newbegin;
     return numpages;
 }

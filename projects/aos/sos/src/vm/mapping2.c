@@ -6,7 +6,6 @@
 // these code will only work on AArch64 and nothing else!
 
 #include "mapping2.h"
-#include "addrspace.h"
 #include "../frame_table.h"
 #include "../utils.h"
 #include "../vmem_layout.h"
@@ -41,9 +40,17 @@ typedef enum {
        size_t _type = (type); \
        (_vaddr >> (12 + _type * 9)) & 0x1FF; })
 
+#define PD_INDEX_VADDR(ind) \
+    ((((uintptr_t)(ind).str.pt) << 12) | (((uintptr_t)(ind).str.pd) << 21) | (((uintptr_t)(ind).str.pud) << 30) | (((uintptr_t)(ind).str.pgd) << 39))
+
 // ---- local functions section ----
 // for debugging
 size_t PD_INDEX_MACROEXP(uintptr_t vaddr, size_t type) {return PD_INDEX(vaddr, type);}
+
+size_t PD_INDEX_VADDR_MACROEXP(pd_indices_t ind) {return PD_INDEX_VADDR(ind);}
+
+inline bool userptr_single_map(uintptr_t local, pd_indices_t useridx, 
+    seL4_CapRights_t userright, seL4_Word pid);
 
 #define PD_ENTRY(pd, idx) \
     (((struct pagedir*)frame_data((pd).dir))[(idx)])
@@ -433,7 +440,6 @@ void* userptr_read(userptr_t src, size_t len, seL4_Word badge, seL4_CPtr vspace)
 
     // create the AS
     addrspace_t curras;
-    uint32_t currasidx;
     if(ret) {
         curras.attr.type = AS_NORMAL;
         // we set write to true, as sometimes we also need to ensure the NULL terminator.
@@ -441,7 +447,7 @@ void* userptr_read(userptr_t src, size_t len, seL4_Word badge, seL4_CPtr vspace)
         curras.begin = ret;
         curras.end = ret + pagecount * PAGE_SIZE_4K;
         // this ensures that other thread can't touch our scratch region
-        if(addrspace_add(&scratchas, curras, false, &currasidx) != AS_ADD_NOERR) {
+        if(addrspace_add(&scratchas, curras, false, NULL) != AS_ADD_NOERR) {
             ZF_LOGE("Cannot map scratch address space.");
             ret = 0;
         }
@@ -523,6 +529,9 @@ void* userptr_read(userptr_t src, size_t len, seL4_Word badge, seL4_CPtr vspace)
             "Error unmapping scratch frame");
         // and remove the AS
         sync_mutex_lock(&scratch_lock);
+        // find the index again, as our scratch AS might be moved around while we didn't lock the AS
+        int currasidx = addrspace_find(&scratchas, src);
+        ZF_LOGF_IF(currasidx < 0, "Got invalid scratch AS.");
         addrspace_remove(&scratchas, currasidx);
         sync_mutex_unlock(&scratch_lock);
         return 0;
@@ -531,6 +540,132 @@ void* userptr_read(userptr_t src, size_t len, seL4_Word badge, seL4_CPtr vspace)
     // offset the ret
     ret += src % PAGE_SIZE_4K;
     return (void*)ret;
+}
+
+userptr_write_state_t userptr_write_start(userptr_t src, size_t len, dynarray_t* userasarr, seL4_Word badge, seL4_CPtr vspace)
+{
+    userptr_write_state_t ret = {0};
+    addrspace_t scratch = {0};
+    scratch.attr.type = AS_NORMAL;
+    scratch.perm = seL4_CapRights_new(false, false, true, true);
+
+    // the usual checking
+    if(badge >= MAX_PID || !vspace)
+        return ret;
+    struct bookkeeping* userbk = bk + badge;
+    if(userbk->vspace != vspace)
+        return ret;
+
+    // check if the given address range is valid in user's
+    int asidx = addrspace_find(userasarr, src);
+    if(asidx < 0)
+        return ret;
+    addrspace_t* useras = (addrspace_t*)userasarr->data + asidx;
+
+    // out of bound of user's AS?
+    // also take into account that a region can be adjacent to another
+    while((src + len) >= useras->end) {
+        if((uint32_t)asidx < userasarr->used) {
+            if((useras+1)->begin == useras->end) {
+                ++useras;
+                ++asidx;
+            } else
+                return ret;
+        } else
+            return ret;
+    }
+
+    // at this point, the given address range should be valid.
+    // now create a scratch mapping
+    sync_mutex_lock(&scratch_lock);
+    // check if we have enough scratch vmem to handle this
+    if(scratchas.used == 0) {
+        // check if our entire addrspace can be used to fit this request!
+        if(PAGE_SIZE_4K < (VMEM_TOP - SOS_SCRATCH))
+            ret.curr = scratch.begin = SOS_SCRATCH;
+    } else {
+        // find an empty region, starting from rearmost!
+        for(int i = scratchas.used - 1; i >= 0; --i) {
+            uintptr_t scregend = ((addrspace_t*)scratchas.data)[i].end;
+            if(PAGE_SIZE_4K < (VMEM_TOP - scregend)) {
+                ret.curr = scratch.begin = scregend;
+                break;
+            }
+        }
+    }
+    // our code is designed not to invoke malloc again on scratch space, so ...
+    ZF_LOGF_IF(scratchas.used + 1 >= scratchas.capacity, 
+        "Request is going to exceed scratch AS slot.");
+    
+    // create the AS
+    if(ret.curr) {
+        scratch.end = scratch.begin + PAGE_SIZE_4K;
+        if(addrspace_add(&scratchas, scratch, false, NULL) != AS_ADD_NOERR) {
+            ZF_LOGE("Cannot map scratch address space.");
+            ret.curr = 0;
+        }
+    }
+    sync_mutex_unlock(&scratch_lock);
+
+    // setup offset and remaining bytes
+    ret.curr += src % PAGE_SIZE_4K;
+    ret.remcurr = MIN(PAGE_SIZE_4K - (src % PAGE_SIZE_4K), len);
+    ret.remall = len;
+    ret.pid = badge;
+    ret.userasperm = useras->perm;
+
+    // setup indices for mapping user's vspace
+    for(PDType pdtype=PT_PGD; pdtype >= PT_PT; --pdtype)
+        ret.useridx.arr[pdtype] = PD_INDEX(src, pdtype);
+
+    if(!userptr_single_map(scratch.begin, ret.useridx, useras->perm, badge)) {
+        // failed. remove the AS.
+        // we assume that the frame is not mapped to SOS at it returns an error!
+        // however, it might be mapped to user's tho
+        sync_mutex_lock(&scratch_lock);
+        int asidx = addrspace_find(&scratchas, scratch.begin);
+        ZF_LOGF_IF(asidx < 0, "Scratch map not found.");
+        addrspace_remove(&scratchas, asidx);
+        sync_mutex_unlock(&scratch_lock);
+
+        ret.curr = 0;
+    }
+
+    return ret;
+}
+
+bool userptr_write_next(userptr_write_state_t* it)
+{
+    if(it->curr) {
+        // unmap SOS scratch frame
+        it->curr = ROUND_DOWN(it->curr, PAGE_SIZE_4K);
+        if(grp01_unmap_frame(0, bk->vspace, it->curr, it->curr + PAGE_SIZE_4K) != seL4_NoError) {
+            ZF_LOGE("Error unmapping scratch frame.");
+            return false;
+        }
+
+        it->remall -= it->remcurr;
+        it->remcurr = MIN(it->remall, PAGE_SIZE_4K);
+
+        if(it->remall) {
+            // increment user page index
+            for(PDType i = PT_PT; i <= PT_PGD; ++i) {
+                if(++it->useridx.arr[i] >= 512)
+                    it->useridx.arr[i] = 0;
+                else
+                    break;
+            }
+
+            // remap the SOS scratch with the new user address
+            if(!userptr_single_map(it->curr, it->useridx, it->userasperm, it->pid)) {
+                // we expect caller to call the userptr_unmap
+                it->curr = 0;
+                return false;
+            }
+        } else 
+            it->curr = 0;
+    } 
+    return true;
 }
 
 void userptr_unmap(void* sosaddr)
@@ -544,4 +679,48 @@ void userptr_unmap(void* sosaddr)
         addrspace_remove(&scratchas, idx);
     }
     sync_mutex_unlock(&scratch_lock);
+}
+
+bool userptr_single_map(uintptr_t local, pd_indices_t useridx, 
+    seL4_CapRights_t userright, seL4_Word pid)
+{
+    // check if we have a frame already on user's
+    struct pagedir pd = bk[pid].sh_pgd;
+    frame_ref_t fr = 0;
+    for(PDType pdtype=PT_PGD; pdtype > PT_PT; --pdtype) {
+        pd = PD_ENTRY(pd, useridx.arr[pdtype]);
+        if(!pd.dir) 
+            break;
+    }
+    
+    // if pddir == 0, then one or more of intermediary PD doesn't have a directory mapped
+    if(pd.dir) 
+        // check if PT has entry
+        fr = ((frame_ref_t*)frame_data(pd.dir))[useridx.str.pt] & FR_FLAG_REF_AREA;
+
+    if(!fr) {
+        // have to map frame
+        fr = alloc_frame();
+        if(!fr) {
+            ZF_LOGE("Cannot allocate frame for user.");
+            return false;
+        }
+        if(grp01_map_frame(pid, fr, true, bk[pid].vspace, PD_INDEX_VADDR(useridx), 
+            userright, seL4_ARM_Default_VMAttributes) != seL4_NoError)
+        {
+            ZF_LOGE("Cannot map user's frame.");
+            return false;
+        }
+    } 
+    
+    // map the frame to the designated scratch address
+    if(grp01_map_frame(0, fr, false, bk->vspace, local, seL4_AllRights, 
+        seL4_ARM_Default_VMAttributes) != seL4_NoError)
+    {
+        ZF_LOGE("Cannot map frame to SOS scratch");
+        return false;
+    }
+
+    // OK!
+    return true;
 }

@@ -53,6 +53,69 @@ void hello(size_t depth)
     hello(depth + 1);
 }
 
+void printbuff(char* b, size_t len)
+{
+    for(size_t i = 0; i < len; ++i)
+        putchar(b[i]);
+    putchar('\n');
+    putchar('\n');
+}
+
+void printfmt()
+{
+    
+}
+
+void read_test(int fh)
+{
+    int rs;
+    printf("Read invalid pointer. \n");
+    rs = read(fh, 1234, 100);
+    printf("Got: %d\n", rs);
+
+    printf("Read local stack. \n");
+    char test[100];
+    strcpy(test, "for debugging");
+    rs = read(fh, test, 100);
+    printf("Got: %d\n", rs);
+    puts("Data:");
+    printbuff(test, 100);
+
+    char* test_mmap = mmap(NULL, 16384, PROT_READ | PROT_WRITE, MAP_ANON, 0, 0);
+    char* test_mmap2 = mmap(NULL, 16384, PROT_READ | PROT_WRITE, MAP_ANON, 0, 0);
+    printf("mmap 1 = %p\n", test_mmap);
+    printf("mmap 2 = %p\n", test_mmap2);
+    
+    puts("Read out of bound");
+    rs = read(fh, test_mmap2 + 16380, 10);
+    printf("Got: %d\n", rs);
+
+    puts("Read across page boundary");
+    rs = read(fh, test_mmap + 0x2FF0, 100);
+    printf("Got: %d\n", rs);
+    puts("Data:");
+    printbuff(test_mmap + 0x2FF0, 100);
+
+    puts("Read across adjacent segment boundary");
+    rs = read(fh, test_mmap + 0x3FF0, 100);
+    printf("Got: %d\n", rs);
+    puts("Data:");
+    printbuff(test_mmap + 0x3FF0, 100);
+
+    puts("Read large");
+    rs = read(fh, test_mmap + 0x1100, 20000);
+    printf("Got: %d\n", rs);
+    puts("Will show result in 4 sec. Be ready!");
+    //sleep(4);
+    puts("Data:");
+    printbuff(test_mmap + 0x1100, 20000);
+}
+
+void write_test(int fh)
+{
+
+}
+
 int main(void)
 {
     long ret;
@@ -70,7 +133,8 @@ int main(void)
     int msglen;
 
     int fh = open("console", O_RDWR);
-    int rs = write(fh, "Hello World!\n", 13);
+    int rs = write(fh, "Hello World! Read test!\n", 24);
+    read_test(fh);
 
     rs = write(fh, NULL, 10);
 

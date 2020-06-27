@@ -31,12 +31,12 @@
 #define SOS_FRAME_DATA       (0x8200000000)
 
 /* Constants for how SOS will layout the address space of any processes it loads up */
-#define PROCESS_STACK_TOP   (0x90000000)
-#define PROCESS_STACK_MAX_PAGES 32768
+#define PROCESS_STACK_TOP   (0x8F00000000)
+#define PROCESS_STACK_MAX_PAGES (0xF00000)
 #define PROCESS_IPC_BUFFER  (0xA0000000)
 #define PROCESS_VMEM_START  (0xC0000000)
 
 #define PROCESS_HEAP        (0x100000000)
-#define PROCESS_HEAP_SIZE   (0xF00000000)
+#define PROCESS_HEAP_SIZE   (0x7000000000)
 // bottommost of MMAP region
-#define PROCESS_MMAP        (0x1000000000)
+#define PROCESS_MMAP        (0x9000000000)

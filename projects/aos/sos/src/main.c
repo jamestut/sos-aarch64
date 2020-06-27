@@ -79,7 +79,7 @@
 #define IRQ_EP_BADGE         BIT(seL4_BadgeBits - 1ul)
 #define IRQ_IDENT_BADGE_BITS MASK(seL4_BadgeBits - 1ul)
 
-#define TTY_NAME             "tty_test"
+#define TTY_NAME             "m3"
 #define TTY_PRIORITY         (0)
 #define TTY_EP_BADGE         (101)
 
@@ -171,12 +171,12 @@ void handle_syscall(seL4_Word badge, seL4_CPtr reply, ut_t* reply_ut)
     
     case SOS_SYSCALL_READ:
         handler_ret = fileman_read(badge, pt->vspace, seL4_GetMR(1), reply, reply_ut, 
-            seL4_GetMR(2), seL4_GetMR(3));
+            seL4_GetMR(2), seL4_GetMR(3), &pt->as);
         break;
 
     case SOS_SYSCALL_WRITE: 
         handler_ret = fileman_write(badge, pt->vspace, seL4_GetMR(1), reply, reply_ut, 
-            seL4_GetMR(2), seL4_GetMR(3));
+            seL4_GetMR(2), seL4_GetMR(3), &pt->as);
         break;
 
     case SOS_SYSCALL_MMAP:
@@ -193,7 +193,7 @@ void handle_syscall(seL4_Word badge, seL4_CPtr reply, ut_t* reply_ut)
         break;
 
     case SOS_SYSCALL_GROW_STACK:
-        handler_ret = handle_grow_stack(&pt->as, seL4_GetMR(1));
+        handler_ret = handle_grow_stack(&pt->as, badge, pt->vspace, seL4_GetMR(1));
         break;
 
     case SOS_SYSCALL_USLEEP:
