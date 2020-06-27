@@ -340,10 +340,19 @@ void bg_fileman_rw(void* data)
     // negative = negative errno convention
     ssize_t ret = 0;
 
-    // TODO: GRP01 use 2 step locking
     sync_mutex_lock(&pft->felock);
     if(!pfe->used) {
         ret = EBADF * -1;
+        goto finish;
+    }
+
+    if(!param->len) {
+        ret = 0;
+        goto finish;
+    }
+
+    if(!param->buff) {
+        ret = EFAULT * -1;
         goto finish;
     }
 

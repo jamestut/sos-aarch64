@@ -171,7 +171,7 @@ int sos_sys_rw(bool read, int file, char *buf, size_t nbyte)
     return rd;
 }
 
-size_t sos_grow_stack(size_t pages)
+size_t sos_grow_stack(ssize_t pages)
 {
     seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, 2);
     seL4_SetMR(0, SOS_SYSCALL_GROW_STACK);
@@ -181,6 +181,24 @@ size_t sos_grow_stack(size_t pages)
     ssize_t ret = seL4_GetMR(0);
     if(ret < 0)
         return 0;
+    return ret;
+}
+
+ssize_t sos_brk(uintptr_t target)
+{
+    seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, 2);
+    seL4_SetMR(0, SOS_SYSCALL_BRK);
+    seL4_SetMR(1, target);
+    
+    msginfo = seL4_Call(SOS_IPC_EP_CAP, msginfo);
+
+    // negative errno semantic
+    if(seL4_GetMR(0) < 0) {
+        sos_errno = -seL4_GetMR(0);
+        return -1;
+    }
+
+    return seL4_GetMR(0);
 }
 
 int sos_sys_not_implemented()

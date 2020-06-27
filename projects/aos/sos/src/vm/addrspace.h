@@ -47,3 +47,8 @@ addrspace_add_errors addrspace_add(dynarray_t* arr, addrspace_t as, bool allowov
 void addrspace_remove(dynarray_t* arr, uint32_t index);
 
 int addrspace_find(dynarray_t* arr, uintptr_t vaddr);
+
+// @return if an address space overlaps with one or more results, returns index of one of them.
+//         else, returns -1
+int addrspace_find_overlap(dynarray_t* arr, addrspace_t as);
+

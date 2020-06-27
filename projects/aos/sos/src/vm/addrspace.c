@@ -91,6 +91,11 @@ int addrspace_find(dynarray_t* arr, uintptr_t vaddr)
     return binary_search(arr->data, &vaddr, sizeof(addrspace_t), arr->used, comp_vaddr, false);
 }
 
+int addrspace_find_overlap(dynarray_t* arr, addrspace_t as)
+{
+    return binary_search(arr->data, &as, sizeof(addrspace_t), arr->used, comp_as, false);
+}
+
 int comp_vaddr(const void* a, const void* b)
 {
     uintptr_t vaddr = *((uintptr_t*)a);

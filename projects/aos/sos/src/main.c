@@ -79,13 +79,9 @@
 #define IRQ_EP_BADGE         BIT(seL4_BadgeBits - 1ul)
 #define IRQ_IDENT_BADGE_BITS MASK(seL4_BadgeBits - 1ul)
 
-#define TTY_NAME             "m3"
+#define TTY_NAME             "tty_test"
 #define TTY_PRIORITY         (0)
 #define TTY_EP_BADGE         (101)
-
-/* The number of additional stack pages to provide to the initial
- * process */
-#define INITIAL_PROCESS_EXTRA_STACK_PAGES 4
 
 /*
  * A dummy starting syscall
@@ -189,7 +185,7 @@ void handle_syscall(seL4_Word badge, seL4_CPtr reply, ut_t* reply_ut)
         break;
 
     case SOS_SYSCALL_BRK:
-        handler_ret = handle_brk(&pt->as, seL4_GetMR(1));
+        handler_ret = handle_brk(&pt->as, badge, pt->vspace, seL4_GetMR(1));
         break;
 
     case SOS_SYSCALL_GROW_STACK:
@@ -334,7 +330,7 @@ static uintptr_t init_process_stack(seL4_Word badge, elf_t *elf_file)
     // create the stack region
     addrspace_t stackas;
     stackas.end = PROCESS_STACK_TOP;
-    stackas.begin = PROCESS_STACK_TOP - INITIAL_PROCESS_EXTRA_STACK_PAGES * PAGE_SIZE_4K;
+    stackas.begin = PROCESS_STACK_TOP - PROCESS_STACK_MIN_PAGES * PAGE_SIZE_4K;
     stackas.perm = seL4_CapRights_new(false, false, true, true);
     stackas.attr.type = AS_STACK;
 

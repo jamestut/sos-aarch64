@@ -12,58 +12,79 @@
 
 #define MMAP_SUPPORTED_FLAGS (MAP_ANON | MAP_PRIVATE)
 
-ssize_t handle_brk(dynarray_t* arr, size_t brksz)
+ssize_t handle_brk(dynarray_t* arr, seL4_Word badge, seL4_CPtr vspace, uintptr_t target)
 {
     // for request of 0, return the END of the heap segment
 
-    if(brksz >= (PROCESS_HEAP_SIZE + PROCESS_HEAP))
+    if(target >= (PROCESS_HEAP_SIZE + PROCESS_HEAP))
         return ENOMEM * -1;
-    if(brksz && brksz < PROCESS_HEAP)
+    if(target && target < PROCESS_HEAP)
         return EINVAL * -1;
 
     seL4_CapRights_t rights = seL4_CapRights_new(false, false, true, true);
 
     // find the section that *might* contain the heap
-    int section_id = addrspace_find(arr, PROCESS_HEAP);
-    addrspace_t* as = arr->data;
+    int32_t section_id = addrspace_find(arr, PROCESS_HEAP);
+    addrspace_t* asarr = arr->data;
 
     // if a section is found, make sure it is THE heap
     if(section_id >= 0) {
         // if this happens, which should never happens, then very likely
         // the loaded ELF is mallicious. we might as well reject its request for heap!
-        if(as[section_id].attr.type != AS_HEAP)
+        if(asarr[section_id].attr.type != AS_HEAP)
             return ENOMEM * -1;
     }
 
-    // basically the heap here is of size 0, therefore end == start
-    if(brksz == 0 && section_id < 0)
+    // basically the heap currently allocated is of size 0, therefore end == start
+    if(target == 0 && section_id < 0)
         return PROCESS_HEAP;
 
     uintptr_t ret = PROCESS_HEAP;
+    target = ROUND_UP(target, PAGE_SIZE_4K);
 
     if(section_id < 0) {
         // no heap section found. create one!
         addrspace_t heapas;
         heapas.begin = PROCESS_HEAP;
-        ret = heapas.end = ROUND_UP(brksz, PAGE_SIZE_4K);
+        ret = heapas.end = target;
         heapas.attr.type = AS_HEAP;
         heapas.perm = rights;
-        
+
+        // will return an error if it overlaps with another region
         if(addrspace_add(arr, heapas, false, NULL) != AS_ADD_NOERR) {
             ZF_LOGE("Failed to add heap address space section.");
             return ENOMEM * -1;
         }
     } else {
-        // adjust the size of the existing region
-        as += section_id;
+        addrspace_t* heapas = asarr + section_id;
         
-        if(!brksz)
-            ret = as->end;
-        else if(brksz < as->end)
-            // TODO: GRP01 support reduce break
-            return EINVAL * -1;
-        else
-            ret = as->end = ROUND_UP(brksz, PAGE_SIZE_4K);
+        target = ROUND_UP(target, PAGE_SIZE_4K);
+        if(!target)
+            // just return the current break size
+            ret = heapas->end;
+        else if(target <= heapas->end) {
+            // see if we have to reduce the heap section
+            if(target < heapas->end) {
+                // indeed!
+                ZF_LOGE_IF(grp01_unmap_frame(badge, vspace, target, heapas->end) != seL4_NoError,
+                    "Unmapping frames from shrunk heap brk failed.");
+                ret = heapas->end = target;
+                
+                if(target == heapas->begin)
+                    // remove the section altogether!
+                    addrspace_remove(arr, section_id);
+            } else
+                ret = heapas->end;
+        }
+        else {
+            // enlarge heap. ensure that we don't clash!
+            if(section_id < arr->used) {
+                if(target > ((addrspace_t*)arr->data)[section_id+1].begin)
+                    return ENOMEM * -1;
+            }
+            // OK
+            ret = heapas->end = target;
+        }
     }
 
     return ret;
@@ -184,7 +205,7 @@ ssize_t handle_munmap(dynarray_t* asarr, seL4_Word badge, seL4_CPtr vspace,
     return 1;
 }
 
-ssize_t handle_grow_stack(dynarray_t* asarr, seL4_Word badge, seL4_CPtr vspace, size_t bypage)
+ssize_t handle_grow_stack(dynarray_t* asarr, seL4_Word badge, seL4_CPtr vspace, ssize_t bypage)
 {
     // find the stack by looking the vaddr of the bottom of the 1st page
     uintptr_t vaddr = PROCESS_STACK_TOP - PAGE_SIZE_4K;
@@ -192,7 +213,7 @@ ssize_t handle_grow_stack(dynarray_t* asarr, seL4_Word badge, seL4_CPtr vspace, 
     if(asidx < 0)
         return -1;
 
-    // truncate
+    // truncate max (to prevent integer overflow)
     if(bypage > PROCESS_STACK_MAX_PAGES)
         bypage = PROCESS_STACK_MAX_PAGES;
     
@@ -202,12 +223,17 @@ ssize_t handle_grow_stack(dynarray_t* asarr, seL4_Word badge, seL4_CPtr vspace, 
     if(stackas->attr.type != AS_STACK)
         return -1;
 
-    size_t numpages = (stackas->end - stackas->begin) >> seL4_PageBits;
+    ssize_t numpages = (stackas->end - stackas->begin) >> seL4_PageBits;
     // do not modify if request is too large (or 0)
     if(!bypage || (bypage > (VMEM_TOP >> seL4_PageBits)))
         return numpages;
 
     numpages += bypage;
+
+    // truncate min
+    if(numpages < PROCESS_STACK_MIN_PAGES)
+        numpages = PROCESS_STACK_MIN_PAGES;
+
     uintptr_t newbegin = stackas->end - (numpages << seL4_PageBits);
     // check for region collision
     if(asidx) {
@@ -224,7 +250,8 @@ ssize_t handle_grow_stack(dynarray_t* asarr, seL4_Word badge, seL4_CPtr vspace, 
     newbegin = stackas->end - (numpages << seL4_PageBits);
     if(newbegin > stackas->begin) {
         // shrink!
-        grp01_unmap_frame(badge, vspace, stackas->begin, newbegin);
+        ZF_LOGE_IF(grp01_unmap_frame(badge, vspace, stackas->begin, newbegin) != seL4_NoError,
+            "Unmapping frames from shrunk stack failed.");
     }
     stackas->begin = newbegin;
     return numpages;

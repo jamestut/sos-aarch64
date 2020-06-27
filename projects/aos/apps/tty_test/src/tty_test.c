@@ -40,30 +40,18 @@
 
 #define PAGE_SIZE_4K 0x1000
 
-#define MALLOC_SZ    20000
-#define MALLOC_TEST  20000
+#define MALLOC_SZ      128*1024*1024
+#define MALLOC_TEST    MALLOC_SZ
+#define WRITE_TEST_SZ  20000
 
 char mymem[128];
 
 extern int sos_errno;
 
-void hello(size_t depth)
+void recurse_test(size_t depth)
 {
     printf("Hello %d!\n", depth);
-    hello(depth + 1);
-}
-
-void printbuff(char* b, size_t len)
-{
-    for(size_t i = 0; i < len; ++i)
-        putchar(b[i]);
-    putchar('\n');
-    putchar('\n');
-}
-
-void printfmt()
-{
-    
+    recurse_test(depth + 1);
 }
 
 void read_test(int fh)
@@ -73,81 +61,80 @@ void read_test(int fh)
     rs = read(fh, 1234, 100);
     printf("Got: %d\n", rs);
 
-    printf("Read local stack. \n");
+    puts("Read local stack. Please enter at least 100 chars");
     char test[100];
     strcpy(test, "for debugging");
     rs = read(fh, test, 100);
     printf("Got: %d\n", rs);
     puts("Data:");
-    printbuff(test, 100);
+    write(fh, test, 100);
 
     char* test_mmap = mmap(NULL, 16384, PROT_READ | PROT_WRITE, MAP_ANON, 0, 0);
     char* test_mmap2 = mmap(NULL, 16384, PROT_READ | PROT_WRITE, MAP_ANON, 0, 0);
     printf("mmap 1 = %p\n", test_mmap);
     printf("mmap 2 = %p\n", test_mmap2);
     
-    puts("Read out of bound");
+    puts("Read out of bound. Please enter at least 10 chars.");
     rs = read(fh, test_mmap2 + 16380, 10);
     printf("Got: %d\n", rs);
 
-    puts("Read across page boundary");
+    puts("Read across page boundary. Please enter at least 100 chars.");
     rs = read(fh, test_mmap + 0x2FF0, 100);
     printf("Got: %d\n", rs);
     puts("Data:");
-    printbuff(test_mmap + 0x2FF0, 100);
+    write(fh, test_mmap + 0x2FF0, rs);
+    putchar('\n');
 
-    puts("Read across adjacent segment boundary");
+    puts("Read across adjacent segment boundary. Please enter at least 100 chars.");
     rs = read(fh, test_mmap + 0x3FF0, 100);
     printf("Got: %d\n", rs);
     puts("Data:");
-    printbuff(test_mmap + 0x3FF0, 100);
+    write(fh, test_mmap + 0x3FF0, rs);
+    putchar('\n');
 
-    puts("Read large");
+    puts("Read large max 20000 chars");
     rs = read(fh, test_mmap + 0x1100, 20000);
     printf("Got: %d\n", rs);
-    puts("Will show result in 4 sec. Be ready!");
-    //sleep(4);
+    puts("Will show result in 2 sec. Be ready!");
+    sleep(2);
     puts("Data:");
-    printbuff(test_mmap + 0x1100, 20000);
+    write(fh, test_mmap + 0x1100, rs);
+    putchar('\n');
 }
 
 void write_test(int fh)
 {
+    int rs;
+    puts("Write from NULL buffer.");
+    rs = write(fh, NULL, 10);
+    printf("Result: %d\n", rs);
 
+    puts("Write untouched mmap. Expect garbage (or emptyness).");
+    char* testrw = mmap(NULL, 16384, PROT_WRITE | PROT_READ, MAP_ANON, 0, 0);
+    printf("mmap addr: %p\n", testrw);
+    rs = write(fh, testrw + 10, 15);
+    putchar('\n');
+
+    puts("Write across page boundary.");
+    assert(rs == -1);
+    strcpy(testrw + 4088, "This text spawns across page boundary!");
+    rs = write(fh, testrw + 4088, 38);
+    putchar('\n');
+
+    puts("write data of several pages, consisting of repeating A-Z.");
+    printf("Writing %d bytes\n", WRITE_TEST_SZ);
+    char* data = malloc(WRITE_TEST_SZ);
+    for(int i=0; i<WRITE_TEST_SZ; ++i)
+        data[i] = 'A' + (i%26);
+    write(fh, data, WRITE_TEST_SZ);
+    putchar('\n');
+
+    puts("PASS!");
 }
 
-int main(void)
+void vmem_abuse()
 {
-    long ret;
-    sosapi_init_syscall_table();
-
-    /* initialise communication */
-    ttyout_init();
-
-    printf("Current stack is %d pages\n", sos_grow_stack(0));
-    printf("New stack is now %d pages\n", sos_grow_stack(999999999));
-    printf("Regrowing again. Stack is now %d pages\n", sos_grow_stack(999999999));
-    //hello(0);
-
-    char msgbuff[128];
-    int msglen;
-
-    int fh = open("console", O_RDWR);
-    int rs = write(fh, "Hello World! Read test!\n", 24);
-    read_test(fh);
-
-    rs = write(fh, NULL, 10);
-
-    char* testrw = mmap(NULL, 16384, PROT_WRITE | PROT_READ, MAP_ANON, 0, 0);
-    rs = write(fh, testrw + 10, 15);
-    assert(rs == -1);
-    strcpy(testrw + 4090, "Across page boundary!");
-    rs = write(fh, testrw + 4090, 21);
-
-
-    msglen = sprintf(msgbuff, "Test malloc size = %d, actual = %d\n", MALLOC_SZ, MALLOC_TEST);
-    rs = write(fh, msgbuff, msglen);
-
+    puts("Test many mmap and touches them!");
     char* ptr = mmap(NULL, 16384, PROT_WRITE | PROT_READ, MAP_ANON, 0, 0);
     printf("ptr1: %p\n", ptr);
     char* ptr2 = mmap(NULL, 32768, PROT_WRITE | PROT_READ, MAP_ANON, 0, 0);
@@ -159,14 +146,18 @@ int main(void)
     ptr[2] = 'a';
     ptr[14000] = 'b';
     ptr[10000] = 'c';
-    ret = munmap(ptr + 4096, 8192);
+    munmap(ptr + 4096, 8192);
     printf("Unmapped\n");
     munmap(ptr4 + 8192, 32768);
     ptr4[7700] = 'z';
     puts("OK");
     ptr4[100000] = 'z';
     puts("OK");
-    //ptr4[10000] = 'z';
+    {
+        // uncomment to test fault
+        //ptr4[10000] = 'z';
+        //puts("Success??");
+    }
 
     printf("Big mmap\n");
     char* bigmmap = mmap(NULL, 0xFFFFFFFF000, PROT_WRITE | PROT_READ, MAP_ANON, 0, 0);
@@ -179,55 +170,55 @@ int main(void)
     bigmmap[0x54321DEFAB] = 'D';
     munmap(bigmmap, 0xFFFFFFFF000);
     printf("Big mmap unmapped\n");
-    
-    strcpy(ptr4 + 100000, "console");
-    int fh2 = open(ptr4 + 100000, O_RDWR);
-
-    char* malloctgt = malloc(MALLOC_SZ);
-    msglen = sprintf(msgbuff, "malloc ptr is = %p\n", malloctgt);
-    write(fh, msgbuff, msglen);
-    msglen = sprintf(msgbuff, "test write\n");
-    write(fh, msgbuff, msglen);
-
-    for(int i=0; i<MALLOC_TEST; ++i) {
-        malloctgt[i] = 'A' + (i % 26);
+    {
+        // uncomment to fault
+        //bigmmap[0x54321DEFAB] = 'D';
+        //puts("Success???");
     }
 
-    msglen = sprintf(msgbuff, "test read\n");
-    write(fh, msgbuff, msglen);
+    printf("Malloc test of size %d\n", MALLOC_SZ);
+    char* malloctgt = malloc(MALLOC_SZ);
+    printf("malloc ptr is = %p\n", malloctgt);
+    puts("Test write");
+    for(int i=0; i<MALLOC_TEST; ++i) 
+        malloctgt[i] = 'A' + (i % 26);
+    puts("Write OK. Now reading back and confirm correctness.");
 
     bool haserr = false;
     for(int i=0; i<MALLOC_TEST; ++i) {
         if(malloctgt[i] != ('A' + (i % 26))) {
-            msglen = sprintf(msgbuff, "Data error at item #%d\n", i);
-            write(fh, msgbuff, msglen);
             haserr = true;
-            break;
+            printf("Data error at item #%d\n", i);
         }
     }
+    if(!haserr)
+        puts("Data confirmed correct!");
+    puts("Finished read test.");
+}
 
-    if(!haserr) {
-        msglen = sprintf(msgbuff, "test passed!\n");
-        write(fh, msgbuff, msglen);
-    }
+int main(void)
+{
+    long ret;
+    sosapi_init_syscall_table();
 
-    msglen = sprintf(msgbuff, "Try long write to FH %d\n", fh2);
-    write(fh2, msgbuff, msglen);
+    sos_debug_print("tty_test started\n", 17);
 
-    rs = write(fh2, malloctgt, MALLOC_SZ);
-    
-    close(fh);
-    while(1){}
+    /* initialise communication */
+    ttyout_init();
 
-    int ctr = 0;
-    calloc(123456789, 1);
-    while(1) {
-        for(int i=1000; i<=100000; ++i) {
-            void* ptr = calloc(i, 1); //tes
-            printf("malloc %d bytes result = %p\n", i, ptr);
-            free(ptr);
-        }
-    }
+    printf("Current stack is %d pages\n", sos_grow_stack(0));
+    printf("New stack is now %d pages\n", sos_grow_stack(999999999));
+    printf("Regrowing again. Stack is now %d pages\n", sos_grow_stack(999999999));
+
+    int testfh = open("console", O_RDWR);
+
+    // recurse_test(0);
+    // read_test(testfh);
+    vmem_abuse();
+    // write_test(testfh);
+
+    while(1)
+        sleep(1000);
 
     return 0;
 }

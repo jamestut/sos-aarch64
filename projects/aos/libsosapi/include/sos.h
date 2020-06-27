@@ -129,9 +129,13 @@ void sos_sys_usleep(int msec);
 /* Sleeps for the specified number of milliseconds.
  */
 
-size_t sos_grow_stack(size_t pages);
+size_t sos_grow_stack(ssize_t pages);
 // Grow the stack by the specified pages. Returns the size of stack in pages.
 // Once stack grows, it can't be shrunk.
+
+ssize_t sos_brk(uintptr_t target);
+// return the pointer to brk limit, or negative value if error.
+// created because musl's user's brk implementation is broken on SOS.
 
 /*************************************************************************/
 /*                                   */

@@ -406,7 +406,7 @@ frame_ref_t grp01_get_frame(seL4_Word badge, seL4_CPtr vspace, seL4_Word vaddr)
 void* userptr_read(userptr_t src, size_t len, seL4_Word badge, seL4_CPtr vspace)
 {
     // the usual checking
-    if(badge >= MAX_PID || !vspace)
+    if(badge >= MAX_PID || !vspace || !len)
         return 0;
     struct bookkeeping* userbk = bk + badge;
     if(userbk->vspace != vspace)
@@ -548,6 +548,9 @@ userptr_write_state_t userptr_write_start(userptr_t src, size_t len, dynarray_t*
     addrspace_t scratch = {0};
     scratch.attr.type = AS_NORMAL;
     scratch.perm = seL4_CapRights_new(false, false, true, true);
+
+    if(!len)
+        return ret;
 
     // the usual checking
     if(badge >= MAX_PID || !vspace)
