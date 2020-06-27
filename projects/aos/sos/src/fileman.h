@@ -4,7 +4,9 @@
 #include <cspace/cspace.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <grp01/dynaarray.h>
 
+#include "grp01.h"
 #include "ut.h"
 
 // note: for functions that return negative number when they're failing, please
@@ -40,7 +42,7 @@ void fileman_destroy(seL4_Word pid);
 // @return errno if failed, 0 if pending.
 //         Result will be replied directly to the client once finishes,
 //         using negative errno semantic.
-int fileman_open(seL4_Word pid, seL4_CPtr reply, ut_t* reply_ut, const char* filename, int mode);
+int fileman_open(seL4_Word pid, seL4_CPtr vspace, seL4_CPtr reply, ut_t* reply_ut, userptr_t filename, size_t filename_len, int mode);
 
 // @param fh valid file handle for the given pid returned by fileman_open
 // @return 1 for immediate return, or 0 for pending operation.
@@ -50,10 +52,10 @@ int fileman_close(seL4_Word pid, seL4_CPtr reply, ut_t* reply_ut, int fh);
 // @return errno if failed, 0 if pending.
 //         Result will be replied directly to the client once finishes,
 //         using negative errno semantic.
-int fileman_write(seL4_Word pid, int fh, seL4_CPtr reply, ut_t* reply_ut, void* buff, uint32_t len);
+int fileman_write(seL4_Word pid, seL4_CPtr vspace, int fh, seL4_CPtr reply, ut_t* reply_ut, userptr_t buff, uint32_t len, dynarray_t* userasarr);
 
 // read to buffer from the underlying file system
 // @return errno if failed, 0 if pending.
 //         Result will be replied directly to the client once finishes,
 //         using negative errno semantic.
-int fileman_read(seL4_Word pid, int fh, seL4_CPtr reply, ut_t* reply_ut, void* buff, uint32_t len);
+int fileman_read(seL4_Word pid, seL4_CPtr vspace, int fh, seL4_CPtr reply, ut_t* reply_ut, userptr_t buff, uint32_t len, dynarray_t* userasarr);

@@ -24,17 +24,22 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
 
 #include "ttyout.h"
 
 #include <sel4/sel4.h>
 
+int fh;
+
 void ttyout_init(void)
 {
     /* Perform any initialisation you require here */
+    fh = open("console", O_WRONLY);
 }
 
-static size_t sos_debug_print(const void *vData, size_t count)
+size_t sos_debug_print(const void *vData, size_t count)
 {
 #ifdef CONFIG_DEBUG_BUILD
     size_t i;
@@ -49,7 +54,8 @@ static size_t sos_debug_print(const void *vData, size_t count)
 size_t sos_write(void *vData, size_t count)
 {
     //implement this to use your syscall
-    return sos_debug_print(vData, count);
+    //return sos_debug_print(vData, count);
+    return write(fh, vData, count);
 }
 
 size_t sos_read(void *vData, size_t count)

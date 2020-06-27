@@ -55,7 +55,7 @@ extern char *frame_table_list_names[];
 typedef struct frame frame_t;
 PACKED struct frame {
     /* Page used to map frame into SOS memory. */
-    seL4_ARM_Page sos_page: 20;
+    seL4_ARM_Page sos_page: 23;
     /* Index in frame table of previous element in list. */
     frame_ref_t prev : 19;
     /* Index in frame table of next element in list. */
@@ -63,9 +63,9 @@ PACKED struct frame {
     /* Indicates which list the frame is in. */
     list_id_t list_id : 2;
     /* Unused bits */
-    size_t unused : 4;
+    size_t unused : 1;
 };
-compile_time_assert("Small CPtr size", 20 >= INITIAL_TASK_CSPACE_BITS);
+compile_time_assert("Small CPtr size", 23 >= INITIAL_TASK_CSPACE_BITS);
 
 /*
  * Initialise frame table.
@@ -104,6 +104,9 @@ cspace_t *frame_table_cspace(void);
  * only a limited number of frames may be held by the frame table.
  */
 frame_ref_t alloc_frame(void);
+
+// like alloc_frame, but guaranteed to be zero initialized.
+frame_ref_t alloc_empty_frame(void);
 
 /*
  * Free a frame allocated by the frame table.

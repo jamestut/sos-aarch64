@@ -6,16 +6,18 @@
 #include <utils/zf_log_if.h>
 #include <sync/mutex.h>
 #include <cspace/cspace.h>
+#include <sys/types.h>
 
 #include "utils.h"
 #include "fs/console.h"
 #include "fs/nullfile.h"
 #include "bgworker.h"
 #include "ut.h"
+#include "grp01.h"
+#include "vm/mapping2.h"
 
 #include "fileman.h"
 
-#define MAX_PID 128
 #define MAX_FH  128
 #define SPECIAL_HANDLERS 1
 
@@ -54,8 +56,10 @@ struct filehandler nullhandler;
 
 // structs specific for arguments to bgworker
 struct bg_open_param {
-    const char* filename;
+    userptr_t filename;
+    size_t filename_len;
     seL4_Word pid;
+    seL4_CPtr vspace;
     seL4_CPtr reply;
     ut_t* reply_ut;
     int mode;
@@ -63,9 +67,11 @@ struct bg_open_param {
 
 struct bg_rw_param {
     bool read; //false = write
-    void* buff;
+    userptr_t buff;
+    dynarray_t* userasarr;
     uint32_t len;
     seL4_Word pid;
+    seL4_CPtr vspace;
     int fh;
     seL4_CPtr reply;
     ut_t* reply_ut;
@@ -87,7 +93,9 @@ void send_and_free_reply_cap(ssize_t response, seL4_CPtr reply, ut_t* reply_ut);
 void bg_fileman_open(void* data);
 void bg_fileman_rw(void* data);
 void bg_fileman_close(void* data);
-inline int fileman_rw_dispatch(bool read, seL4_Word pid, int fh, seL4_CPtr reply, ut_t* reply_ut, void* buff, uint32_t len);
+int fileman_rw_dispatch(bool read, seL4_Word pid, seL4_CPtr vspace, int fh, seL4_CPtr reply, ut_t* reply_ut, userptr_t buff, uint32_t len, dynarray_t* userasarr);
+ssize_t fileman_write_broker(struct filehandler* fh, int id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len);
+ssize_t fileman_read_broker(dynarray_t* userasarr, struct filehandler* fh, int id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len);
 
 // function definitions area
 
@@ -145,7 +153,7 @@ int fileman_create(seL4_Word pid)
     return 0;
 }
 
-int fileman_open(seL4_Word pid, seL4_CPtr reply, ut_t* reply_ut, const char* filename, int mode)
+int fileman_open(seL4_Word pid, seL4_CPtr vspace, seL4_CPtr reply, ut_t* reply_ut, userptr_t filename, size_t filename_len, int mode)
 {
     // error checking
     // bad pid
@@ -156,9 +164,11 @@ int fileman_open(seL4_Word pid, seL4_CPtr reply, ut_t* reply_ut, const char* fil
     struct bg_open_param * param = malloc(sizeof(struct bg_open_param));
     if(!param)
         return ENOMEM * -1;
-    param->filename = filename; // WARNING! won't work on multithreaded processes!
+    param->filename = filename;
+    param->filename_len = filename_len;
     param->mode = mode;
     param->pid = pid;
+    param->vspace = vspace;
     param->reply = reply;
     param->reply_ut = reply_ut;
 
@@ -187,17 +197,17 @@ int fileman_close(seL4_Word pid, seL4_CPtr reply, ut_t* reply_ut, int fh)
     return 0;
 }
 
-int fileman_write(seL4_Word pid, int fh, seL4_CPtr reply, ut_t* reply_ut, void* buff, uint32_t len)
+int fileman_write(seL4_Word pid, seL4_CPtr vspace, int fh, seL4_CPtr reply, ut_t* reply_ut, userptr_t buff, uint32_t len, dynarray_t* userasarr)
 {
-    return fileman_rw_dispatch(false, pid, fh, reply, reply_ut, buff, len);
+    return fileman_rw_dispatch(false, pid, vspace, fh, reply, reply_ut, buff, len, userasarr);
 }
 
-int fileman_read(seL4_Word pid, int fh, seL4_CPtr reply, ut_t* reply_ut, void* buff, uint32_t len)
+int fileman_read(seL4_Word pid, seL4_CPtr vspace, int fh, seL4_CPtr reply, ut_t* reply_ut, userptr_t buff, uint32_t len, dynarray_t* userasarr)
 {
-    return fileman_rw_dispatch(true, pid, fh, reply, reply_ut, buff, len);
+    return fileman_rw_dispatch(true, pid, vspace, fh, reply, reply_ut, buff, len, userasarr);
 }
 
-int fileman_rw_dispatch(bool read, seL4_Word pid, int fh, seL4_CPtr reply, ut_t* reply_ut, void* buff, uint32_t len)
+int fileman_rw_dispatch(bool read, seL4_Word pid, seL4_CPtr vspace, int fh, seL4_CPtr reply, ut_t* reply_ut, userptr_t buff, uint32_t len, dynarray_t* userasarr)
 {
     // error checking
     // bad pid
@@ -214,11 +224,13 @@ int fileman_rw_dispatch(bool read, seL4_Word pid, int fh, seL4_CPtr reply, ut_t*
         return ENOMEM * -1;
     param->read = read;
     param->pid = pid;
+    param->vspace = vspace;
     param->fh = fh;
     param->buff = buff;
     param->len = len;
     param->reply = reply;
     param->reply_ut = reply_ut;
+    param->userasarr = userasarr;
 
     bgworker_enqueue_callback(bg_fileman_rw, param);
     return 0;
@@ -240,11 +252,22 @@ void bg_fileman_open(void* data)
     struct bg_open_param * param = data;
     struct filetable* pft = ft + param->pid;
 
-    sync_mutex_lock(&pft->felock);
-
     // 0 or more = file handle number
     // negative = negative errno convention
     int ret = 0;
+
+    // map the userptr before proceeding
+    // take into account the terminating NULL
+    char* filename = userptr_read(param->filename, param->filename_len + 1, param->pid, param->vspace);
+    if(!filename) {
+        ret = EFAULT * -1;
+        goto finish;
+    }
+    // ensure that the filename is NULL terminated
+    char filename_term = filename[param->filename_len];
+    filename[param->filename_len] = 0;
+
+    sync_mutex_lock(&pft->felock);
 
     // find unused slot in the process' file table
     int slot = -1;
@@ -267,7 +290,7 @@ void bg_fileman_open(void* data)
     // get the handler (console only for the moment)
     struct filehandler * handler = NULL;
     for(int i=0; i<SPECIAL_HANDLERS; ++i) {
-        if(strcmp(param->filename, specialhandlers[i].name) == 0) {
+        if(strcmp(filename, specialhandlers[i].name) == 0) {
             handler = &specialhandlers[i].handler;
             break;
         }
@@ -280,12 +303,17 @@ void bg_fileman_open(void* data)
     }
 
     // try open
-    int id = handler->open(param->filename, param->mode);
+    int id = handler->open(filename, param->mode);
     if(id < 0) {
         // failure. we expect the opener to return our negative errno model.
         ret = id;
         goto finish;
     }
+
+    // finished dealing with filename. restore the char!
+    filename[param->filename_len] = filename_term;
+    // and unmap from ours
+    userptr_unmap(filename);
     
     // OK. assign to process' file table entry
     struct fileentry * pfe = pft->fe + slot;
@@ -312,18 +340,27 @@ void bg_fileman_rw(void* data)
     // negative = negative errno convention
     ssize_t ret = 0;
 
-    // TODO: GRP01 use 2 step locking
     sync_mutex_lock(&pft->felock);
     if(!pfe->used) {
         ret = EBADF * -1;
         goto finish;
     }
 
+    if(!param->len) {
+        ret = 0;
+        goto finish;
+    }
+
+    if(!param->buff) {
+        ret = EFAULT * -1;
+        goto finish;
+    }
+
     // action!
     if(param->read)
-        ret = pfe->handler->read(pfe->id, param->buff, param->len);
+        ret = fileman_read_broker(param->userasarr, pfe->handler, pfe->id, param->buff, param->pid, param->vspace, param->len);
     else
-        ret = pfe->handler->write(pfe->id, param->buff, param->len);
+        ret = fileman_write_broker(pfe->handler, pfe->id, param->buff, param->pid, param->vspace, param->len);
 
 finish:
     sync_mutex_unlock(&pft->felock);
@@ -347,4 +384,53 @@ void bg_fileman_close(void* data)
     sync_mutex_unlock(&pft->felock);
     send_and_free_reply_cap(1, param->reply, param->reply_ut);
     free(param);
+}
+
+ssize_t fileman_write_broker(struct filehandler* fh, int id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len)
+{
+    void* buff = userptr_read(ptr, len, badge, vspace);
+    if(!buff)
+        return EFAULT * -1;
+    
+    ssize_t ret = fh->write(id, buff, len);
+
+    userptr_unmap(buff);
+
+    return ret;
+}
+
+ssize_t fileman_read_broker(dynarray_t* userasarr, struct filehandler* fh, int id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len)
+{
+    if(!len)
+        return 0;
+
+    userptr_write_state_t it = userptr_write_start(ptr, len, userasarr, badge, vspace);
+    if(!it.curr)
+        return -EFAULT;
+    
+    ssize_t ret = 0;
+    void* startptr = it.curr;
+
+    while(it.curr) {
+        ssize_t rd = fh->read(id, (void*)it.curr, it.remcurr);
+        if(rd < 0) {
+            ZF_LOGE("Filesystem returned an error");
+            ret = -EIO;
+            break;
+        }
+        ret += rd;
+        if (rd < it.remcurr)
+            // EOF!
+            break;
+        
+        if(!userptr_write_next(&it)) {
+            ZF_LOGE("Error incrementing pointer when handling user read request.");
+            ret = -EIO;
+            break;
+        }
+    }
+
+    userptr_unmap(startptr);
+    
+    return ret;
 }

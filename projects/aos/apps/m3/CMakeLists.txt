@@ -11,23 +11,15 @@
 #
 cmake_minimum_required(VERSION 3.7.2)
 
-project(libsosapi C)
-
-add_library(
-    sosapi
-    EXCLUDE_FROM_ALL
-    src/sos.c
-    src/sys_exit.c
-    src/sys_morecore.c
-    src/sys_stdio.c
-    src/sys_thread.c
-    src/sys_time.c
-    src/vsyscall.c
-    # GRP01 : M3
-    src/sys_moremem.c
-)
-target_include_directories(sosapi PUBLIC include)
-target_link_libraries(sosapi muslc sel4 utils aos)
+project(m3 C)
 
 # warn about everything
-add_compile_options(-Wall -Werror -W -Wextra)
+add_compile_options(-Wall -g3 -O0)
+
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -u __vsyscall_ptr")
+
+add_executable(m3 EXCLUDE_FROM_ALL src/m3.c)
+target_include_directories(m3 PRIVATE include)
+target_link_libraries(m3 sel4runtime muslc sel4 sosapi)
+
+add_app(m3)

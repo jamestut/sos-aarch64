@@ -9,6 +9,8 @@
 
 #ifndef CONFIG_PLAT_ODROIDC2
 
+#define FAKE_READ_LIMIT UINT64_MAX
+
 void console_fs_init(void)
 {
     ZF_LOGI("fake console initialized.");
@@ -16,16 +18,17 @@ void console_fs_init(void)
 
 int32_t console_fs_read(int id, void* ptr, size_t len)
 {
-    const char* dummy = "hello";
-    char* target = ptr;
-    // do nothing
-    ZF_LOGD("fake console read.");
-    int to_copy = MIN(len,5);
-    for(int i=0; i<to_copy; ++i) {
-        target[i] = dummy[i];
+    static int charidx = 0;
+
+    size_t toread = MIN(len, FAKE_READ_LIMIT);
+    char* charptr = ptr;
+
+    for(size_t i=0; i<toread; ++i) {
+        charptr[i] = 'A' + charidx;
+        charidx = (charidx + 1) % 26;
     }
 
-    return to_copy;
+    return toread;
 }
 
 int32_t console_fs_write(int id, void* ptr, size_t len)
@@ -33,7 +36,7 @@ int32_t console_fs_write(int id, void* ptr, size_t len)
     // print to tty :)
     char* cptr = ptr;
     fputs("fake console: ", stdout);
-    for(int i=0; i<len; ++i)
+    for(size_t i=0; i<len; ++i)
         putchar(cptr[i]);
     putchar('\n');
     return len;

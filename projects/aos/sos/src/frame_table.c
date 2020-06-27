@@ -129,6 +129,14 @@ frame_ref_t alloc_frame(void)
     return ref_from_frame(frame);
 }
 
+frame_ref_t alloc_empty_frame(void)
+{
+    frame_ref_t ret = alloc_frame();
+    if(ret) 
+        memset(frame_data(ret), 0, PAGE_SIZE_4K);
+    return ret;
+}
+
 void free_frame(frame_ref_t frame_ref)
 {
     if (frame_ref != NULL_FRAME) {
