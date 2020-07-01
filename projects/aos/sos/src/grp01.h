@@ -12,6 +12,10 @@
 // internal threads
 #define INT_THRD_BADGE_FLAG (0x1000)
 
+// badges for internal threads
+#define BACKEND_HANDLER_BADGE   (INT_THRD_BADGE_FLAG + 1)
+#define LIBNFS_EVTLOOP_BADGE    (INT_THRD_BADGE_FLAG + 2)
+
 // number of handlers in bgworker
 #define BG_HANDLERS         1
 

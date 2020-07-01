@@ -36,7 +36,7 @@ struct fileentry
 {
     bool used;
     struct filehandler * handler;
-    int id; // id internal to the file system
+    ssize_t id; // id internal to the file system
 };
 
 struct filetable
@@ -95,8 +95,8 @@ void bg_fileman_open(seL4_CPtr delegate_ep, void* data);
 void bg_fileman_rw(seL4_CPtr delegate_ep, void* data);
 void bg_fileman_close(seL4_CPtr delegate_ep, void* data);
 int fileman_rw_dispatch(bool read, seL4_Word pid, seL4_CPtr vspace, int fh, seL4_CPtr reply, ut_t* reply_ut, userptr_t buff, uint32_t len, dynarray_t* userasarr);
-ssize_t fileman_write_broker(seL4_CPtr delegate_ep, struct filehandler* fh, int id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len);
-ssize_t fileman_read_broker(seL4_CPtr delegate_ep, dynarray_t* userasarr, struct filehandler* fh, int id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len);
+ssize_t fileman_write_broker(seL4_CPtr delegate_ep, struct filehandler* fh, ssize_t id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len);
+ssize_t fileman_read_broker(seL4_CPtr delegate_ep, dynarray_t* userasarr, struct filehandler* fh, ssize_t id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len);
 
 // function definitions area
 
@@ -303,7 +303,7 @@ void bg_fileman_open(seL4_CPtr delegate_ep, void* data)
     }
 
     // try open
-    int id = handler->open(filename, param->mode);
+    ssize_t id = handler->open(filename, param->mode);
     if(id < 0) {
         // failure. we expect the opener to return our negative errno model.
         ret = id;
@@ -386,7 +386,7 @@ void bg_fileman_close(seL4_CPtr delegate_ep, void* data)
     delegate_free(delegate_ep, param);
 }
 
-ssize_t fileman_write_broker(seL4_CPtr delegate_ep, struct filehandler* fh, int id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len)
+ssize_t fileman_write_broker(seL4_CPtr delegate_ep, struct filehandler* fh, ssize_t id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len)
 {
     void* buff = delegate_userptr_read(delegate_ep, ptr, len, badge, vspace);
     if(!buff)
@@ -399,7 +399,7 @@ ssize_t fileman_write_broker(seL4_CPtr delegate_ep, struct filehandler* fh, int 
     return ret;
 }
 
-ssize_t fileman_read_broker(seL4_CPtr delegate_ep, dynarray_t* userasarr, struct filehandler* fh, int id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len)
+ssize_t fileman_read_broker(seL4_CPtr delegate_ep, dynarray_t* userasarr, struct filehandler* fh, ssize_t id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len)
 {
     if(!len)
         return 0;

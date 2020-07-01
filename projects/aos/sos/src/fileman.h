@@ -14,16 +14,16 @@
 
 // @param fn filename to open
 // @return negative if fail, internal file id (0 or larger) if success.
-typedef int (*file_open_fn)(const char* fn, int mode);
+typedef ssize_t (*file_open_fn)(const char* fn, int mode);
 
 // @param id   whatever returned by file_open_fn
 //        ptr  target pointer to store/read
 //        len  max length to read/write
 // @return negative if fail, number of bytes read/written if success. 
-typedef ssize_t (*file_rw_fn)(int id, void* ptr, size_t len);
+typedef ssize_t (*file_rw_fn)(ssize_t id, void* ptr, size_t len);
 
 // @param id whatever returned by file_open_fn
-typedef void (*file_close_fn)(int id);
+typedef void (*file_close_fn)(ssize_t id);
 
 // initialize file table manager.
 // call once when SOS is starting up.
