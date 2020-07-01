@@ -7,6 +7,7 @@
 #include "threads.h"
 #include "utils.h"
 #include "vm/mapping2.h"
+#include "delegate.h"
 
 #include "bgworker.h"
 
@@ -32,6 +33,14 @@ struct {
     sync_cv_t cv;
 } cqueue;
 
+sos_thread_t* workers[BG_HANDLERS];
+// indicate to workers if main has finished spawning everything
+struct {
+    bool initfinish;
+    sync_bin_sem_t lock;
+    sync_cv_t cv;
+} workerssynch;
+
 /* local functions declarations */
 void bgworker_loop(void*);
 
@@ -46,27 +55,43 @@ void bgworker_init()
 
     // empty the data structure before we begin!
     memset(&cqueue, 0, sizeof(cqueue));
+    memset(&workerssynch, 0, sizeof(workerssynch));
+    memset(workers, 0, sizeof(workers));
 
     // init the notifications for the sync objects
     // we'd like to keep the resulting ntfn for the SOS' lifetime,
     // so we'll discard the ref to the resulting the ut_t and also the ntfn itself.
-    seL4_CPtr ntfn_lck, ntfn_cv;
-    if(!alloc_retype(&ntfn_lck, seL4_NotificationObject, seL4_NotificationBits)) {
+    // also, creating the libsel4sync objects will never fail if the ntfn caps are correct!
+    seL4_CPtr ntfn;
+    if(!alloc_retype(&ntfn, seL4_NotificationObject, seL4_NotificationBits)) 
         ZF_LOGF("Cannot create notification object for lock.");
-    }
-    if(!alloc_retype(&ntfn_cv, seL4_NotificationObject, seL4_NotificationBits)) {
+    sync_bin_sem_init(&cqueue.lock, ntfn, 1);
+    if(!alloc_retype(&ntfn, seL4_NotificationObject, seL4_NotificationBits))
         ZF_LOGF("Cannot create notification object for CV.");
-    }
-    // creating these objects will never fail if the ntfn caps are correct!
-    sync_bin_sem_init(&cqueue.lock, ntfn_lck, 1);
-    sync_cv_init(&cqueue.cv, ntfn_cv);
+    sync_cv_init(&cqueue.cv, ntfn);
 
+    // now create the synch objects for worker's indication that they all got the slot
+    if(!alloc_retype(&ntfn, seL4_NotificationObject, seL4_NotificationBits)) 
+        ZF_LOGF("Cannot create notification object for workerssynch' lock.");
+    sync_bin_sem_init(&workerssynch.lock, ntfn, 1);
+    if(!alloc_retype(&ntfn, seL4_NotificationObject, seL4_NotificationBits)) 
+        ZF_LOGF("Cannot create notification object for workerssynch' CV.");
+    sync_cv_init(&workerssynch.cv, ntfn);
+    workerssynch.initfinish = false;
+
+    // spawn all workers
     for(int i=0; i<BG_HANDLERS; ++i) {
-        if(!spawn(bgworker_loop, NULL, "bgworker_thread", BACKEND_HANDLER_BADGE)) {
+        workers[i] = spawn(bgworker_loop, workers + i, "bgworker_thread", BACKEND_HANDLER_BADGE);
+        if(!workers[i]) {
             ZF_LOGF("Cannot create backend handler thread (thread %d of %d).", 
                 i+1, BG_HANDLERS);
         }
     }
+
+    // tell the workers that they may proceed!
+    sync_bin_sem_wait(&workerssynch.lock);
+    workerssynch.initfinish = true;
+    sync_cv_broadcast_release(&workerssynch.lock, &workerssynch.cv);
 }
 
 bool bgworker_enqueue_callback(bgworker_callback_fn fn, void* args)
@@ -95,8 +120,17 @@ bool bgworker_enqueue_callback(bgworker_callback_fn fn, void* args)
     return ret;
 }
 
-void bgworker_loop(UNUSED void* unused)
+void bgworker_loop(void* thrd_handle_p)
 {
+    // wait until we're allowed to proceed, as the thread handle struct may not 
+    // be initialized properly yet if we proceed now
+    sync_bin_sem_wait(&workerssynch.lock);
+    while(!workerssynch.initfinish)
+        sync_cv_wait(&workerssynch.lock, &workerssynch.cv);
+    sync_bin_sem_post(&workerssynch.lock);
+
+    sos_thread_t* thrdhdl = *((sos_thread_t**)thrd_handle_p);
+
     // no shutdown condition here. we wait 4ever!
     while(1) {
         sync_bin_sem_wait(&cqueue.lock);
@@ -111,7 +145,7 @@ void bgworker_loop(UNUSED void* unused)
         
         // unlock and we shall do the time consuming operation!
         sync_bin_sem_post(&cqueue.lock);
-        data.fn(data.data);
+        data.fn(thrdhdl->user_ep, data.data);
     }
 }
 

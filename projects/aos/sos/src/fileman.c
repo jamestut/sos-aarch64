@@ -15,6 +15,7 @@
 #include "ut.h"
 #include "grp01.h"
 #include "vm/mapping2.h"
+#include "delegate.h"
 
 #include "fileman.h"
 
@@ -89,13 +90,13 @@ struct bg_close_param {
 struct filetable ft[MAX_PID];
 
 // local functions declaration area
-void send_and_free_reply_cap(ssize_t response, seL4_CPtr reply, ut_t* reply_ut);
-void bg_fileman_open(void* data);
-void bg_fileman_rw(void* data);
-void bg_fileman_close(void* data);
+void send_and_free_reply_cap(seL4_CPtr delegate_ep, ssize_t response, seL4_CPtr reply, ut_t* reply_ut);
+void bg_fileman_open(seL4_CPtr delegate_ep, void* data);
+void bg_fileman_rw(seL4_CPtr delegate_ep, void* data);
+void bg_fileman_close(seL4_CPtr delegate_ep, void* data);
 int fileman_rw_dispatch(bool read, seL4_Word pid, seL4_CPtr vspace, int fh, seL4_CPtr reply, ut_t* reply_ut, userptr_t buff, uint32_t len, dynarray_t* userasarr);
-ssize_t fileman_write_broker(struct filehandler* fh, int id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len);
-ssize_t fileman_read_broker(dynarray_t* userasarr, struct filehandler* fh, int id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len);
+ssize_t fileman_write_broker(seL4_CPtr delegate_ep, struct filehandler* fh, int id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len);
+ssize_t fileman_read_broker(seL4_CPtr delegate_ep, dynarray_t* userasarr, struct filehandler* fh, int id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len);
 
 // function definitions area
 
@@ -236,18 +237,17 @@ int fileman_rw_dispatch(bool read, seL4_Word pid, seL4_CPtr vspace, int fh, seL4
     return 0;
 }
 
-void send_and_free_reply_cap(ssize_t response, seL4_CPtr reply, ut_t* reply_ut)
+void send_and_free_reply_cap(seL4_CPtr delegate_ep, ssize_t response, seL4_CPtr reply, ut_t* reply_ut)
 {
     seL4_MessageInfo_t reply_msg = seL4_MessageInfo_new(0, 0, 0, 1);
     seL4_SetMR(0, response);
     seL4_Send(reply, reply_msg);
     // delete the reply cap for now (and mark the backing ut as free)
-    cspace_delete(&cspace, reply);
-    cspace_free_slot(&cspace, reply);
-    ut_free(reply_ut);
+    delegate_free_cap(delegate_ep, reply, true, true);
+    delegate_free_ut(delegate_ep, reply_ut);
 }
 
-void bg_fileman_open(void* data)
+void bg_fileman_open(seL4_CPtr delegate_ep, void* data)
 {
     struct bg_open_param * param = data;
     struct filetable* pft = ft + param->pid;
@@ -258,7 +258,7 @@ void bg_fileman_open(void* data)
 
     // map the userptr before proceeding
     // take into account the terminating NULL
-    char* filename = userptr_read(param->filename, param->filename_len + 1, param->pid, param->vspace);
+    char* filename = delegate_userptr_read(delegate_ep, param->filename, param->filename_len + 1, param->pid, param->vspace);
     if(!filename) {
         ret = EFAULT * -1;
         goto finish;
@@ -313,7 +313,7 @@ void bg_fileman_open(void* data)
     // finished dealing with filename. restore the char!
     filename[param->filename_len] = filename_term;
     // and unmap from ours
-    userptr_unmap(filename);
+    delegate_userptr_unmap(delegate_ep, filename);
     
     // OK. assign to process' file table entry
     struct fileentry * pfe = pft->fe + slot;
@@ -326,11 +326,11 @@ void bg_fileman_open(void* data)
 
 finish:
     sync_mutex_unlock(&pft->felock);
-    send_and_free_reply_cap(ret, param->reply, param->reply_ut);
-    free(param);
+    send_and_free_reply_cap(delegate_ep, ret, param->reply, param->reply_ut);
+    delegate_free(delegate_ep, param);
 }
 
-void bg_fileman_rw(void* data)
+void bg_fileman_rw(seL4_CPtr delegate_ep, void* data)
 {
     struct bg_rw_param * param = data;
     struct filetable* pft = ft + param->pid;
@@ -358,17 +358,17 @@ void bg_fileman_rw(void* data)
 
     // action!
     if(param->read)
-        ret = fileman_read_broker(param->userasarr, pfe->handler, pfe->id, param->buff, param->pid, param->vspace, param->len);
+        ret = fileman_read_broker(delegate_ep, param->userasarr, pfe->handler, pfe->id, param->buff, param->pid, param->vspace, param->len);
     else
-        ret = fileman_write_broker(pfe->handler, pfe->id, param->buff, param->pid, param->vspace, param->len);
+        ret = fileman_write_broker(delegate_ep, pfe->handler, pfe->id, param->buff, param->pid, param->vspace, param->len);
 
 finish:
     sync_mutex_unlock(&pft->felock);
-    send_and_free_reply_cap(ret, param->reply, param->reply_ut);
-    free(param);
+    send_and_free_reply_cap(delegate_ep, ret, param->reply, param->reply_ut);
+    delegate_free(delegate_ep, param);
 }
 
-void bg_fileman_close(void* data)
+void bg_fileman_close(seL4_CPtr delegate_ep, void* data)
 {
     struct bg_close_param * param = data;
     struct filetable* pft = ft + param->pid;
@@ -382,29 +382,29 @@ void bg_fileman_close(void* data)
     
     //finish:
     sync_mutex_unlock(&pft->felock);
-    send_and_free_reply_cap(1, param->reply, param->reply_ut);
-    free(param);
+    send_and_free_reply_cap(delegate_ep, 1, param->reply, param->reply_ut);
+    delegate_free(delegate_ep, param);
 }
 
-ssize_t fileman_write_broker(struct filehandler* fh, int id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len)
+ssize_t fileman_write_broker(seL4_CPtr delegate_ep, struct filehandler* fh, int id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len)
 {
-    void* buff = userptr_read(ptr, len, badge, vspace);
+    void* buff = delegate_userptr_read(delegate_ep, ptr, len, badge, vspace);
     if(!buff)
         return EFAULT * -1;
     
     ssize_t ret = fh->write(id, buff, len);
 
-    userptr_unmap(buff);
+    delegate_userptr_unmap(delegate_ep, buff);
 
     return ret;
 }
 
-ssize_t fileman_read_broker(dynarray_t* userasarr, struct filehandler* fh, int id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len)
+ssize_t fileman_read_broker(seL4_CPtr delegate_ep, dynarray_t* userasarr, struct filehandler* fh, int id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len)
 {
     if(!len)
         return 0;
 
-    userptr_write_state_t it = userptr_write_start(ptr, len, userasarr, badge, vspace);
+    userptr_write_state_t it = delegate_userptr_write_start(delegate_ep, ptr, len, userasarr, badge, vspace);
     if(!it.curr)
         return -EFAULT;
     
@@ -423,14 +423,14 @@ ssize_t fileman_read_broker(dynarray_t* userasarr, struct filehandler* fh, int i
             // EOF!
             break;
         
-        if(!userptr_write_next(&it)) {
+        if(!delegate_userptr_write_next(delegate_ep, &it)) {
             ZF_LOGE("Error incrementing pointer when handling user read request.");
             ret = -EIO;
             break;
         }
     }
 
-    userptr_unmap(startptr);
+    delegate_userptr_unmap(delegate_ep, startptr);
     
     return ret;
 }

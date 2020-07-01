@@ -22,7 +22,7 @@ config_string(SosFrameLimit SOS_FRAME_LIMIT "Frame table frame limit" UNQUOTE DE
 add_config_library(sos "${configure_string}")
 
 # warn about everything
-add_compile_options(-Wall -W -Wextra)
+add_compile_options(-Wall -W -Wextra -g3 -O0)
 # enable stack unwind tables -- this allows backtrace() to work.
 add_compile_options(-funwind-tables)
 add_definitions(-DSTDSOCKET)
@@ -73,6 +73,8 @@ add_executable(
     src/vm/addrspace.c
     src/vm/syshandlers.c
     src/vm/faulthandler.c
+    # GRP01: M4
+    src/delegate.c
 )
 target_include_directories(sos PRIVATE "include" "../libsosapi/include")
 target_link_libraries(

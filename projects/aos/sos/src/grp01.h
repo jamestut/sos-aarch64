@@ -1,5 +1,8 @@
 # pragma once
 
+#include <stddef.h>
+#include <stdint.h>
+
 // contains definitions for group01's SOS assignment
 
 // max no. of processes supported

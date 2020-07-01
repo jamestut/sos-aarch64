@@ -64,6 +64,9 @@
 #include "vm/addrspace.h"
 #include "vm/syshandlers.h"
 #include "vm/faulthandler.h"
+// GRP01: M4
+#include "delegate.h"
+#include "fs/nfs.h"
 
 #include <aos/vsyscall.h>
 
@@ -79,7 +82,7 @@
 #define IRQ_EP_BADGE         BIT(seL4_BadgeBits - 1ul)
 #define IRQ_IDENT_BADGE_BITS MASK(seL4_BadgeBits - 1ul)
 
-#define TTY_NAME             "tty_test"
+#define TTY_NAME             "sosh"
 #define TTY_PRIORITY         (0)
 #define TTY_EP_BADGE         (101)
 
@@ -293,6 +296,7 @@ NORETURN void syscall_loop(seL4_CPtr ep)
         /* Awake! We got a message - check the label and badge to
          * see what the message is about */
         seL4_Word label = seL4_MessageInfo_get_label(message);
+        seL4_Word msglen = seL4_MessageInfo_get_length(message);
 
         if (badge & IRQ_EP_BADGE) {
             /* It's a notification from our bound notification
@@ -303,7 +307,12 @@ NORETURN void syscall_loop(seL4_CPtr ep)
              * message from tty_test! */
             // pass the reply_ut also so that we can tell ut that the reply object is no
             // longer used
-            handle_syscall(badge, reply, reply_ut);
+            if(badge & INT_THRD_BADGE_FLAG)
+                // must be a delegate request from SOS' non main threads
+                handle_delegate_req(badge, msglen, reply, reply_ut);
+            else
+                // from user app
+                handle_syscall(badge, reply, reply_ut);
             // indicate to the next loop that we used this reply object
             reply_ut = NULL;
         } else {
