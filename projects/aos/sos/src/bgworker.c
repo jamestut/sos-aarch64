@@ -62,7 +62,7 @@ void bgworker_init()
     sync_cv_init(&cqueue.cv, ntfn_cv);
 
     for(int i=0; i<BG_HANDLERS; ++i) {
-        if(!thread_create(bgworker_loop, NULL, BACKEND_HANDLER_BADGE, true)) {
+        if(!spawn(bgworker_loop, NULL, "bgworker_thread", BACKEND_HANDLER_BADGE)) {
             ZF_LOGF("Cannot create backend handler thread (thread %d of %d).", 
                 i+1, BG_HANDLERS);
         }
@@ -92,7 +92,7 @@ bool bgworker_enqueue_callback(bgworker_callback_fn fn, void* args)
     }
     sync_bin_sem_post(&cqueue.lock);
 
-    return true;
+    return ret;
 }
 
 void bgworker_loop(UNUSED void* unused)

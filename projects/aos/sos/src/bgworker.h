@@ -1,6 +1,8 @@
 #pragma once
 
-#define BACKEND_HANDLER_BADGE (10)
+#include "grp01.h"
+
+#define BACKEND_HANDLER_BADGE (INT_THRD_BADGE_FLAG + 1)
 
 typedef void (*bgworker_callback_fn)(void*);
 

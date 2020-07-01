@@ -87,7 +87,7 @@ static void thread_trampoline(sos_thread_t *thread, thread_main_f *function, voi
  *
  * TODO: fix memory leaks
  */
-sos_thread_t *thread_create(thread_main_f function, void *arg, seL4_Word badge, bool resume)
+sos_thread_t *thread_create(thread_main_f function, void *arg, const char* name, seL4_Word badge, bool resume)
 {
     /* we allocate stack for additional sos threads
      * on top of the stack for sos */
@@ -190,7 +190,7 @@ sos_thread_t *thread_create(thread_main_f function, void *arg, seL4_Word badge, 
     }
 
     /* Provide a name for the thread -- Helpful for debugging */
-    NAME_THREAD(new_thread->tcb, "second sos thread");
+    NAME_THREAD(new_thread->tcb, name);
 
     /* set up the stack */
     seL4_Word sp;
@@ -227,7 +227,7 @@ sos_thread_t *thread_create(thread_main_f function, void *arg, seL4_Word badge, 
     return new_thread;
 }
 
-sos_thread_t *spawn(thread_main_f function, void *arg, seL4_Word badge)
+sos_thread_t *spawn(thread_main_f function, void *arg, const char* name, seL4_Word badge)
 {
-    return thread_create(function, arg, badge, true);
+    return thread_create(function, arg, name, badge, true);
 }

@@ -701,7 +701,6 @@ NORETURN void *main_continued(UNUSED void *arg)
 
     /* Initialise the network hardware. (meson ethernet for now) */
     #ifdef CONFIG_PLAT_ODROIDC2
-    // TODO: reenable ethernet (this is disabled to make debugging quicker)
     printf("Network init\n");
     network_init(&cspace, timer_vaddr, ntfn);
     #endif
@@ -725,7 +724,10 @@ NORETURN void *main_continued(UNUSED void *arg)
 
     // start anything that have to run separate threads here
     bgworker_init();
-    //start_fake_timer();
+    start_fake_timer();
+
+    // puts("NFS init");
+    // grp01_nfs_init();
 
     syscall_loop(ipc_ep);
 }
