@@ -561,7 +561,112 @@ struct pico_timer_ref
 
 typedef struct pico_timer_ref pico_timer_ref;
 
-DECLARE_HEAP(pico_timer_ref, expire);
+/* DECLARE_HEAP(pico_timer_ref, expire); */
+/* ---- begin heap functions declaration and definition ---- */
+struct heap_pico_timer_ref
+{
+    uint32_t size;
+    uint32_t n;
+    pico_timer_ref *top[MAX_BLOCK_COUNT];
+};
+typedef struct heap_pico_timer_ref heap_pico_timer_ref;
+static inline pico_timer_ref *heap_get_element(struct heap_pico_timer_ref *heap, uint32_t idx)
+{
+    uint32_t elements_per_block = MAX_BLOCK_SIZE / sizeof(pico_timer_ref);
+    return &heap->top[idx / elements_per_block][idx % elements_per_block];
+}
+static inline int8_t heap_increase_size(struct heap_pico_timer_ref *heap)
+{
+    pico_timer_ref *newTop;
+    uint32_t elements_per_block = MAX_BLOCK_SIZE / sizeof(pico_timer_ref);
+    uint32_t elements = (heap->n + 1) % elements_per_block;
+    elements = elements ? elements : elements_per_block;
+    if (heap->n + 1 > elements_per_block * MAX_BLOCK_COUNT)
+    {
+        return -1;
+    }
+    newTop = PICO_ZALLOC(elements * sizeof(pico_timer_ref));
+    if (!newTop)
+    {
+        return -1;
+    }
+    if (heap->top[heap->n / elements_per_block])
+    {
+        memcpy(newTop, heap->top[heap->n / elements_per_block], (elements - 1) * sizeof(pico_timer_ref));
+        PICO_FREE(heap->top[heap->n / elements_per_block]);
+    }
+    heap->top[heap->n / elements_per_block] = newTop;
+    heap->size++;
+    return 0;
+}
+static inline int heap_insert(struct heap_pico_timer_ref *heap, pico_timer_ref *el)
+{
+    pico_timer_ref *half;
+    uint32_t i;
+    if (++heap->n >= heap->size)
+    {
+        if (heap_increase_size(heap))
+        {
+            heap->n--;
+            return -1;
+        }
+    }
+    if (heap->n == 1)
+    {
+        memcpy(heap_get_element(heap, 1), el, sizeof(pico_timer_ref));
+        return 0;
+    }
+    i = heap->n;
+    half = heap_get_element(heap, i / 2);
+    while ((i > 1) && (half->expire > el->expire))
+    {
+        memcpy(heap_get_element(heap, i), heap_get_element(heap, i / 2), sizeof(pico_timer_ref));
+        i /= 2;
+        half = heap_get_element(heap, i / 2);
+    }
+    memcpy(heap_get_element(heap, i), el, sizeof(pico_timer_ref));
+    return 0;
+}
+static inline int heap_peek(struct heap_pico_timer_ref *heap, pico_timer_ref *first)
+{
+    pico_timer_ref *last;
+    pico_timer_ref *left_child;
+    pico_timer_ref *right_child;
+    uint32_t i, child;
+    if (heap->n == 0)
+    {
+        return -1;
+    }
+    memcpy(first, heap_get_element(heap, 1), sizeof(pico_timer_ref));
+    last = heap_get_element(heap, heap->n--);
+    for (i = 1; (i * 2u) <= heap->n; i = child)
+    {
+        child = 2u * i;
+        right_child = heap_get_element(heap, child + 1);
+        left_child = heap_get_element(heap, child);
+        if ((child != heap->n) && (right_child->expire < left_child->expire))
+            child++;
+        left_child = heap_get_element(heap, child);
+        if (last->expire > left_child->expire)
+            memcpy(heap_get_element(heap, i), heap_get_element(heap, child), sizeof(pico_timer_ref));
+        else
+            break;
+    }
+    memcpy(heap_get_element(heap, i), last, sizeof(pico_timer_ref));
+    return 0;
+}
+static inline pico_timer_ref *heap_first(heap_pico_timer_ref *heap)
+{
+    if (heap->n == 0)
+        return NULL;
+    return heap_get_element(heap, 1);
+}
+static inline heap_pico_timer_ref *heap_init(void)
+{
+    heap_pico_timer_ref *p = (heap_pico_timer_ref *)PICO_ZALLOC(sizeof(heap_pico_timer_ref));
+    return p;
+};
+/* ---- end heap ---- */
 
 static heap_pico_timer_ref *Timers;
 
