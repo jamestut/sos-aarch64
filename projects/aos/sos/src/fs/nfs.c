@@ -4,6 +4,7 @@
 #include "../threads.h"
 #include "../network.h"
 #include "../delegate.h"
+#include "../backtrace.h"
 
 #include <sys/stat.h>
 #include <sos/gen_config.h>
@@ -13,6 +14,10 @@
 #include <nfsc/libnfs.h>
 #include <errno.h>
 #include <poll.h>
+#include <utils/arith.h>
+
+// otherwise libnfs will complain about not enough memory
+#define MAX_LIBNFS_CHUNK 8192
 
 // contains pool for sync between request and libnfs' async callback
 typedef struct {
@@ -118,20 +123,19 @@ ssize_t grp01_nfs_open(seL4_CPtr ep, const char* fn, int mode)
     ret = delegate_libnfs_open_async(ep, fn, mode, cb_generic, &param);
     if(ret) {
         ZF_LOGI("Error initializing NFS open.");
-        return -EIO;
+        ret = -EIO;
+    } else {
+        GRP01_NFS_WAIT_ASYNC_FINISH
+
+        if(mypool->status)
+            // ret is negative errno
+            ret = mypool->status;
+        else
+            // zero status = success
+            ret = mypool->multipurpose.nfsfh;
     }
 
-    GRP01_NFS_WAIT_ASYNC_FINISH
-
-    if(mypool->status)
-        // ret is negative errno
-        ret = mypool->status;
-    else
-        // zero status = success
-        ret = mypool->multipurpose.nfsfh;
-
     free_pool(param.poolidx);
-
     return ret;
 }
 
@@ -144,14 +148,59 @@ ssize_t grp01_nfs_read(seL4_CPtr ep, ssize_t id, void* ptr, off_t offset, size_t
     ret = delegate_libnfs_pread_async(ep, (struct nfsfh*)id, offset, len, cb_generic, &param);
     if(ret) {
         ZF_LOGI("Error initializing NFS pread.");
-        return -EIO;
-    }
-    
-    GRP01_NFS_WAIT_ASYNC_FINISH
+        ret = -EIO;
+    } else {
+        GRP01_NFS_WAIT_ASYNC_FINISH
 
-    ret = mypool->status;
+        ret = mypool->status;
+    }
     free_pool(param.poolidx);
     return ret;
+}
+
+ssize_t grp01_nfs_write(seL4_CPtr ep, ssize_t id, void* ptr, off_t offset, size_t len)
+{
+    GRP01_NFS_PREAMBLE(CMD_WRITE)
+
+    ssize_t ret;
+    size_t rem = len;
+    size_t acc = 0;
+    ssize_t err = 0;
+    // chunk write so that NFS doesn't run out of memory
+    while(rem) {
+        size_t towrite = MIN(rem, MAX_LIBNFS_CHUNK);
+        
+        // don't forget to reset the callback status for each loop!
+        mypool->asyncfinish = false;
+        mypool->status = 0;
+
+        ret = delegate_libnfs_pwrite_async(ep, (struct nfsfh*)id, offset + acc, towrite, 
+            (void*)((uintptr_t)ptr + acc), cb_generic, &param);
+        if(ret) {
+            ZF_LOGI("Error initializing NFS pwrite.");
+            err = -EIO;
+            break;
+        } else {
+            GRP01_NFS_WAIT_ASYNC_FINISH
+
+            if(mypool->status < 0) {
+                err = mypool->status;
+                break;
+            }
+            
+            // update offset and remaining
+            rem -= mypool->status;
+            acc += mypool->status;
+            // premature stopping whenlibnfs wrote less than what we asked
+            if(mypool->status < towrite)
+                break;
+        }
+    }
+
+    free_pool(param.poolidx);
+    if(err)
+        return err;
+    return acc;
 }
 
 void grp01_nfs_close(seL4_CPtr ep, ssize_t id)
@@ -162,13 +211,12 @@ void grp01_nfs_close(seL4_CPtr ep, ssize_t id)
     ret = delegate_libnfs_close_async(ep, (struct nfsfh*)id, cb_generic, &param);
     if(ret) {
         ZF_LOGE("Error closing NFS handle.");
-        return;
+    } else {
+        GRP01_NFS_WAIT_ASYNC_FINISH
+
+        if(mypool->status)
+            ZF_LOGE("NFS close with error %d", mypool->status);
     }
-
-    GRP01_NFS_WAIT_ASYNC_FINISH
-
-    if(mypool->status)
-        ZF_LOGE("NFS close with error %d", mypool->status);
     free_pool(param.poolidx);
 }
 
@@ -193,6 +241,7 @@ void cb_generic(int status, struct nfs_context *nfs, void *data, void *private_d
                     memcpy(mypool->multipurpose.readtarget, data, status);
                 }
                 break;
+            case CMD_WRITE:
             case CMD_CLOSE:
                 break;
             default:

@@ -116,7 +116,7 @@ bool fileman_init()
     defaulthandler.open = grp01_nfs_open;
     defaulthandler.close = grp01_nfs_close;
     defaulthandler.read = grp01_nfs_read;
-    defaulthandler.write = NULL; //grp01_nfs_write;
+    defaulthandler.write = grp01_nfs_write;
 
     // install special handlers (console)
     specialhandlers[0].name = "console";

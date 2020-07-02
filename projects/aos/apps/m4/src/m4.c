@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <stdlib.h>
 
 int fh;
 
@@ -39,12 +40,44 @@ size_t sos_read(void *vData, size_t count)
     return 0;
 }
 
-int main()
+void genrandom(size_t itemlen, uint64_t* buff)
 {
-    sosapi_init_syscall_table();
+    uint64_t x = 0x1234567890ULL;
+    for(size_t i=0; i < itemlen; ++i) {
+        x ^= (x << 21);
+        x ^= (x >> 35);
+        x ^= (x << 4);
+        buff[i] = x;
+    }
+}
 
-    ttyout_init();
+void simple_random_write_test()
+{
+    const char* fn = "random.dat";
+    const size_t target = 1200000;
+    const size_t szbyte = target * sizeof(uint64_t);
+    
+    printf("Generating random file of size %llu\n", szbyte);
+    uint64_t* data = malloc(szbyte);
+    printf("Target buffer = %p\n", data);
+    genrandom(target, data);
 
+    printf("Opening file %s\n", fn);
+    int fh = open(fn, O_WRONLY | O_CREAT);
+    printf("Got FH = %d\n", fh);
+    
+    if(fh >= 0) {
+        puts("Writing ...");
+        int rs = write(fh, data, szbyte);
+        printf("write result = %d\n", rs);
+    }
+
+    puts("Closing FH");
+    close(fh);
+}
+
+void simple_read_test()
+{
     puts("M4 app started!");
     puts("Wait for console to settle");
     sleep(2);
@@ -83,6 +116,15 @@ int main()
         }
     }
     close(fh);
+}
+
+int main()
+{
+    sosapi_init_syscall_table();
+
+    ttyout_init();
+
+    simple_random_write_test();
 
     puts("My task is done! I'll be doing nothing now!");
     while(1){}
