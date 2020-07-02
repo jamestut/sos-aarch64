@@ -303,7 +303,7 @@ void bg_fileman_open(seL4_CPtr delegate_ep, void* data)
     }
 
     // try open
-    ssize_t id = handler->open(filename, param->mode);
+    ssize_t id = handler->open(delegate_ep, filename, param->mode);
     if(id < 0) {
         // failure. we expect the opener to return our negative errno model.
         ret = id;
@@ -376,7 +376,7 @@ void bg_fileman_close(seL4_CPtr delegate_ep, void* data)
 
     sync_mutex_lock(&pft->felock);
     if(pfe->used) {
-        pfe->handler->close(pfe->id);
+        pfe->handler->close(delegate_ep, pfe->id);
         pfe->used = false;
     }
     
@@ -392,7 +392,7 @@ ssize_t fileman_write_broker(seL4_CPtr delegate_ep, struct filehandler* fh, ssiz
     if(!buff)
         return EFAULT * -1;
     
-    ssize_t ret = fh->write(id, buff, len);
+    ssize_t ret = fh->write(delegate_ep, id, buff, 0, len);
 
     delegate_userptr_unmap(delegate_ep, buff);
 
@@ -412,7 +412,7 @@ ssize_t fileman_read_broker(seL4_CPtr delegate_ep, dynarray_t* userasarr, struct
     void* startptr = it.curr;
 
     while(it.curr) {
-        ssize_t rd = fh->read(id, (void*)it.curr, it.remcurr);
+        ssize_t rd = fh->read(delegate_ep, id, (void*)it.curr, 0, it.remcurr);
         if(rd < 0) {
             ZF_LOGE("Filesystem returned an error");
             ret = -EIO;
