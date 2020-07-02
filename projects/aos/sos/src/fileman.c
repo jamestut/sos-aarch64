@@ -38,6 +38,7 @@ struct fileentry
     bool used;
     struct filehandler * handler;
     ssize_t id; // id internal to the file system
+    off_t offset;
 };
 
 struct filetable
@@ -98,8 +99,8 @@ void bg_fileman_open(seL4_CPtr delegate_ep, void* data);
 void bg_fileman_rw(seL4_CPtr delegate_ep, void* data);
 void bg_fileman_close(seL4_CPtr delegate_ep, void* data);
 int fileman_rw_dispatch(bool read, seL4_Word pid, seL4_CPtr vspace, int fh, seL4_CPtr reply, ut_t* reply_ut, userptr_t buff, uint32_t len, dynarray_t* userasarr);
-ssize_t fileman_write_broker(seL4_CPtr delegate_ep, struct filehandler* fh, ssize_t id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len);
-ssize_t fileman_read_broker(seL4_CPtr delegate_ep, dynarray_t* userasarr, struct filehandler* fh, ssize_t id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len);
+ssize_t fileman_write_broker(seL4_CPtr delegate_ep, struct filehandler* fh, ssize_t id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len, off_t offset);
+ssize_t fileman_read_broker(seL4_CPtr delegate_ep, dynarray_t* userasarr, struct filehandler* fh, ssize_t id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len, off_t offset);
 
 // function definitions area
 
@@ -113,7 +114,7 @@ bool fileman_init()
     nullhandler.write = null_fs_write;
 
     defaulthandler.open = grp01_nfs_open;
-    defaulthandler.close = NULL; //grp01_nfs_close;
+    defaulthandler.close = grp01_nfs_close;
     defaulthandler.read = grp01_nfs_read;
     defaulthandler.write = NULL; //grp01_nfs_write;
 
@@ -324,6 +325,7 @@ void bg_fileman_open(seL4_CPtr delegate_ep, void* data)
     pfe->used = true;
     pfe->id = id;
     pfe->handler = handler;
+    pfe->offset = 0;
 
     // and return the slot number
     ret = slot;
@@ -362,9 +364,13 @@ void bg_fileman_rw(seL4_CPtr delegate_ep, void* data)
 
     // action!
     if(param->read)
-        ret = fileman_read_broker(delegate_ep, param->userasarr, pfe->handler, pfe->id, param->buff, param->pid, param->vspace, param->len);
+        ret = fileman_read_broker(delegate_ep, param->userasarr, pfe->handler, pfe->id, param->buff, param->pid, param->vspace, param->len, pfe->offset);
     else
-        ret = fileman_write_broker(delegate_ep, pfe->handler, pfe->id, param->buff, param->pid, param->vspace, param->len);
+        ret = fileman_write_broker(delegate_ep, pfe->handler, pfe->id, param->buff, param->pid, param->vspace, param->len, pfe->offset);
+
+    // increment offset if we got a successful read!
+    if(ret > 0) 
+        pfe->offset += ret;
 
 finish:
     sync_mutex_unlock(&pft->felock);
@@ -390,20 +396,20 @@ void bg_fileman_close(seL4_CPtr delegate_ep, void* data)
     delegate_free(delegate_ep, param);
 }
 
-ssize_t fileman_write_broker(seL4_CPtr delegate_ep, struct filehandler* fh, ssize_t id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len)
+ssize_t fileman_write_broker(seL4_CPtr delegate_ep, struct filehandler* fh, ssize_t id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len, off_t offset)
 {
     void* buff = delegate_userptr_read(delegate_ep, ptr, len, badge, vspace);
     if(!buff)
         return EFAULT * -1;
     
-    ssize_t ret = fh->write(delegate_ep, id, buff, 0, len);
+    ssize_t ret = fh->write(delegate_ep, id, buff, offset, len);
 
     delegate_userptr_unmap(delegate_ep, buff);
 
     return ret;
 }
 
-ssize_t fileman_read_broker(seL4_CPtr delegate_ep, dynarray_t* userasarr, struct filehandler* fh, ssize_t id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len)
+ssize_t fileman_read_broker(seL4_CPtr delegate_ep, dynarray_t* userasarr, struct filehandler* fh, ssize_t id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len, off_t offset)
 {
     if(!len)
         return 0;
@@ -416,7 +422,7 @@ ssize_t fileman_read_broker(seL4_CPtr delegate_ep, dynarray_t* userasarr, struct
     void* startptr = it.curr;
 
     while(it.curr) {
-        ssize_t rd = fh->read(delegate_ep, id, (void*)it.curr, 0, it.remcurr);
+        ssize_t rd = fh->read(delegate_ep, id, (void*)it.curr, ret + offset, it.remcurr);
         if(rd < 0) {
             ZF_LOGE("Filesystem returned an error");
             ret = -EIO;

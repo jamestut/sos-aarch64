@@ -62,6 +62,28 @@ int main()
             putchar('\n');
         }
     }
+    puts("Close FH");
+    close(fh);
+    puts("Close FH (again)");
+    close(fh);
+
+    puts("Try open again!");
+    fh = open("cpuinfo", O_RDONLY);
+    printf("M4: 2nd open got fh = %d\n", fh);
+    if(fh >= 0) {
+        char buff[8192];
+        printf("Reading %d bytes.\n", sizeof(buff));
+        int rd = read(fh, buff, sizeof(buff));
+        printf("Read status = %d\n", rd);
+        if(rd > 0) {
+            puts("Read data:");
+            for(int i=0; i<rd; ++i)
+                putchar(buff[i]);
+            putchar('\n');
+        }
+    }
+    close(fh);
+
     puts("My task is done! I'll be doing nothing now!");
     while(1){}
 }

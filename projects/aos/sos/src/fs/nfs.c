@@ -154,6 +154,24 @@ ssize_t grp01_nfs_read(seL4_CPtr ep, ssize_t id, void* ptr, off_t offset, size_t
     return ret;
 }
 
+void grp01_nfs_close(seL4_CPtr ep, ssize_t id)
+{
+    GRP01_NFS_PREAMBLE(CMD_CLOSE)
+
+    ssize_t ret;
+    ret = delegate_libnfs_close_async(ep, (struct nfsfh*)id, cb_generic, &param);
+    if(ret) {
+        ZF_LOGE("Error closing NFS handle.");
+        return;
+    }
+
+    GRP01_NFS_WAIT_ASYNC_FINISH
+
+    if(mypool->status)
+        ZF_LOGE("NFS close with error %d", mypool->status);
+    free_pool(param.poolidx);
+}
+
 void cb_generic(int status, struct nfs_context *nfs, void *data, void *private_data)
 {
     cbparam_t* param = private_data;
@@ -170,9 +188,12 @@ void cb_generic(int status, struct nfs_context *nfs, void *data, void *private_d
                 mypool->multipurpose.nfsfh = data;
                 break;
             case CMD_READ:
-                if(status > 0) 
+                if(status > 0) {
                     // fingers crossed that fileman is providing a correct pointer here!
                     memcpy(mypool->multipurpose.readtarget, data, status);
+                }
+                break;
+            case CMD_CLOSE:
                 break;
             default:
                 // DEBUG. remove assert after finished!
