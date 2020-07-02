@@ -11,15 +11,15 @@
 #
 cmake_minimum_required(VERSION 3.7.2)
 
-project(m3 C)
+project(m4 C)
 
 # warn about everything
 add_compile_options(-Wall -g3 -O0)
 
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -u __vsyscall_ptr")
 
-add_executable(m3 EXCLUDE_FROM_ALL src/m3.c)
-target_include_directories(m3 PRIVATE include)
-target_link_libraries(m3 sel4runtime muslc sel4 sosapi)
+add_executable(m4 EXCLUDE_FROM_ALL src/m4.c)
+target_include_directories(m4 PRIVATE include)
+target_link_libraries(m4 sel4runtime muslc sel4 sosapi)
 
-add_app(m3)
+add_app(m4)

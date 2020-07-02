@@ -40,6 +40,9 @@
 
 #include <ethernet/ethernet.h>
 
+#include <sync/bin_sem.h>
+#include <sync/condition_var.h>
+
 #include <nfsc/libnfs.h>
 
 #include "vmem_layout.h"
@@ -47,6 +50,7 @@
 #include "mapping.h"
 #include "irq.h"
 #include "ut.h"
+#include "utils.h"
 
 
 #ifndef SOS_NFS_DIR
@@ -65,10 +69,17 @@
 #define DHCP_STATUS_ERR         2
 
 static struct pico_device pico_dev;
-static struct nfs_context *nfs = NULL;
+struct nfs_context *nfs = NULL;
 static int dhcp_status = DHCP_STATUS_WAIT;
 static char nfs_dir_buf[PATH_MAX];
 static uint8_t ip_octet;
+
+struct {
+    sync_cv_t cv;
+    sync_bin_sem_t lck;
+    bool initialmountfinished;
+    bool initialmountsuccess;
+} nfs_status = {0};
 
 static void nfs_mount_cb(int status, struct nfs_context *nfs, void *data, void *private_data);
 
@@ -213,6 +224,15 @@ void network_init(cspace_t *cspace, void *timer_vaddr, seL4_CPtr irq_ntfn)
     int error;
     ZF_LOGI("\nInitialising network...\n\n");
 
+    // setup sync variables so that clients know if we finished mount
+    seL4_CPtr ntfn;
+    if(!alloc_retype(&ntfn, seL4_NotificationObject, seL4_NotificationBits))
+        ZF_LOGF("Failed to create notification.");
+    sync_bin_sem_init(&nfs_status.lck, ntfn, 1);
+    if(!alloc_retype(&ntfn, seL4_NotificationObject, seL4_NotificationBits))
+        ZF_LOGF("Failed to create notification.");
+    sync_cv_init(&nfs_status.cv, ntfn);
+
     /* set up the network device irq */
     init_irq(NETWORK_IRQ, true, network_irq);
 
@@ -292,7 +312,47 @@ void nfs_mount_cb(int status, UNUSED struct nfs_context *nfs, void *data,
 {
     if (status < 0) {
         ZF_LOGF("mount/mnt call failed with \"%s\"\n", (char *)data);
+    } else {
+        printf("Mounted nfs dir %s\n", nfs_dir_buf);
+        nfs_status.initialmountsuccess = true;
     }
 
-    printf("Mounted nfs dir %s\n", nfs_dir_buf);
+    // wake up client
+    sync_bin_sem_wait(&nfs_status.lck);
+    nfs_status.initialmountfinished = true;
+    sync_cv_broadcast_release(&nfs_status.lck, &nfs_status.cv);
+}
+
+bool check_nfs_mount_status(void)
+{
+    if(!nfs_status.initialmountfinished) {
+        sync_bin_sem_wait(&nfs_status.lck);
+        while(!nfs_status.initialmountfinished)
+            sync_cv_wait(&nfs_status.lck, &nfs_status.cv);
+        sync_bin_sem_post(&nfs_status.lck);
+    }
+
+    return nfs_status.initialmountsuccess;
+}
+
+int sos_libnfs_open_async(const char *path, int flags, nfs_cb cb, void *private_data)
+{
+    return nfs_open_async(nfs, path, flags, cb, private_data);
+}
+
+int sos_libnfs_pread_async(struct nfsfh *nfsfh, uint64_t offset, 
+    uint64_t count, nfs_cb cb, void *private_data)
+{
+    return nfs_pread_async(nfs, nfsfh, offset, count, cb, private_data);
+}
+
+int sos_libnfs_pwrite_async(struct nfsfh *nfsfh, uint64_t offset, 
+    uint64_t count, const void *buf, nfs_cb cb, void *private_data)
+{
+    return nfs_pwrite_async(nfs, nfsfh, offset, count, buf, cb, private_data);
+}
+
+int sos_libnfs_close_async(struct nfsfh *nfsfh, nfs_cb cb, void *private_data)
+{
+    return nfs_close_async(nfs, nfsfh, cb, private_data);
 }

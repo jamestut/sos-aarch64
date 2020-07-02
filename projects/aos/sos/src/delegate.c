@@ -1,9 +1,11 @@
 #include "delegate.h"
 #include "utils.h"
+#include "network.h"
 
 #include <utils/arith.h>
 
 typedef enum {
+    // generic
     INT_THRDREQ_NONE = 0,
     INT_THRDREQ_MALLOC,
     INT_THRDREQ_FREE,
@@ -12,7 +14,12 @@ typedef enum {
     INT_THRDREQ_USERPTR_WRITE_NEXT,
     INT_THRDREQ_USERPTR_UNMAP,
     INT_THRDREQ_CAP_DELETE_FREE,
-    INT_THRDREQ_UT_FREE
+    INT_THRDREQ_UT_FREE,
+    // NFS specific
+    INT_THRDREQ_NFS_OPEN,
+    INT_THRDREQ_NFS_PREAD,
+    INT_THRDREQ_NFS_PWRITE,
+    INT_THRDREQ_NFS_CLOSE
 } IntThreadReq;
 
 /* ---- common declarations ---- */
@@ -37,6 +44,14 @@ void hdl_userptr_unmap(seL4_CPtr reply);
 void hdl_free_cap(seL4_CPtr reply);
 
 void hdl_free_ut(seL4_CPtr reply);
+
+void hdl_nfs_open(seL4_CPtr reply);
+
+void hdl_nfs_pread(seL4_CPtr reply);
+
+void hdl_nfs_pwrite(seL4_CPtr reply);
+
+void hdl_nfs_pclose(seL4_CPtr reply);
 
 /* ---- definitions start here ---- */
 
@@ -127,6 +142,58 @@ void delegate_free_ut(seL4_CPtr ep, ut_t* ut)
     seL4_Call(ep, msg);
 }
 
+int delegate_libnfs_open_async(seL4_CPtr ep, const char *path, int flags, nfs_cb cb, void *private_data)
+{
+    seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 5);
+    seL4_SetMR(0, INT_THRDREQ_NFS_OPEN);
+    seL4_SetMR(1, path);
+    seL4_SetMR(2, flags);
+    seL4_SetMR(3, cb);
+    seL4_SetMR(4, private_data);
+    seL4_Call(ep, msg);
+    return seL4_GetMR(0);
+}
+
+int delegate_libnfs_pread_async(seL4_CPtr ep, struct nfsfh *nfsfh,
+    uint64_t offset, uint64_t count, nfs_cb cb, void *private_data)
+{
+    seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 6);
+    seL4_SetMR(0, INT_THRDREQ_NFS_PREAD);
+    seL4_SetMR(1, nfsfh);
+    seL4_SetMR(2, offset);
+    seL4_SetMR(3, count);
+    seL4_SetMR(4, cb);
+    seL4_SetMR(5, private_data);
+    seL4_Call(ep, msg);
+    return seL4_GetMR(0);
+}
+
+int delegate_libnfs_pwrite_async(seL4_CPtr ep, struct nfsfh *nfsfh, uint64_t offset, 
+    uint64_t count, const void *buf, nfs_cb cb, void *private_data)
+{
+    seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 7);
+    seL4_SetMR(0, INT_THRDREQ_NFS_PWRITE);
+    seL4_SetMR(1, nfsfh);
+    seL4_SetMR(2, offset);
+    seL4_SetMR(3, count);
+    seL4_SetMR(4, buf);
+    seL4_SetMR(5, cb);
+    seL4_SetMR(6, private_data);
+    seL4_Call(ep, msg);
+    return seL4_GetMR(0);
+}
+
+int delegate_libnfs_close_async(seL4_CPtr ep, struct nfsfh *nfsfh, nfs_cb cb, void *private_data)
+{
+    seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 4);
+    seL4_SetMR(0, INT_THRDREQ_NFS_CLOSE);
+    seL4_SetMR(1, nfsfh);
+    seL4_SetMR(2, cb);
+    seL4_SetMR(3, private_data);
+    seL4_Call(ep, msg);
+    return seL4_GetMR(0);
+}
+
 /* ---- definitions for handler @ main thread ---- */
 
 void handle_delegate_req(seL4_Word badge, seL4_Word msglen, seL4_CPtr reply, ut_t* reply_ut)
@@ -177,6 +244,26 @@ void handle_delegate_req(seL4_Word badge, seL4_Word msglen, seL4_CPtr reply, ut_
         case INT_THRDREQ_UT_FREE:
             PARAM_COUNT_CHECK(msglen, 2);
             hdl_free_ut(reply);
+            break;
+
+        case INT_THRDREQ_NFS_OPEN:
+            PARAM_COUNT_CHECK(msglen, 5);
+            hdl_nfs_open(reply);
+            break;
+
+        case INT_THRDREQ_NFS_PREAD:
+            PARAM_COUNT_CHECK(msglen, 6);
+            hdl_nfs_pread(reply);
+            break;
+
+        case INT_THRDREQ_NFS_PWRITE:
+            PARAM_COUNT_CHECK(msglen, 7);
+            hdl_nfs_pwrite(reply);
+            break;
+
+        case INT_THRDREQ_NFS_CLOSE:
+            PARAM_COUNT_CHECK(msglen, 4);
+            hdl_nfs_pclose(reply);
             break;
         
         default:
@@ -253,4 +340,38 @@ void hdl_free_ut(seL4_CPtr reply)
 {
     ut_free(seL4_GetMR(1));
     hdl_do_nothing(reply);
+}
+
+void hdl_nfs_open(seL4_CPtr reply)
+{
+    seL4_MessageInfo_t reply_msg = seL4_MessageInfo_new(0, 0, 0, 1);
+    int ret = sos_libnfs_open_async(seL4_GetMR(1), seL4_GetMR(2), seL4_GetMR(3), seL4_GetMR(4));
+    seL4_SetMR(0, ret);
+    seL4_Send(reply, reply_msg);
+}
+
+void hdl_nfs_pread(seL4_CPtr reply)
+{
+    seL4_MessageInfo_t reply_msg = seL4_MessageInfo_new(0, 0, 0, 1);
+    int ret = sos_libnfs_pread_async(seL4_GetMR(1), seL4_GetMR(2), seL4_GetMR(3),
+        seL4_GetMR(4), seL4_GetMR(5));
+    seL4_SetMR(0, ret);
+    seL4_Send(reply, reply_msg);
+}
+
+void hdl_nfs_pwrite(seL4_CPtr reply)
+{
+    seL4_MessageInfo_t reply_msg = seL4_MessageInfo_new(0, 0, 0, 1);
+    int ret = sos_libnfs_pwrite_async(seL4_GetMR(1), seL4_GetMR(2), seL4_GetMR(3), seL4_GetMR(4),
+        seL4_GetMR(5), seL4_GetMR(6));
+    seL4_SetMR(0, ret);
+    seL4_Send(reply, reply_msg);
+}
+
+void hdl_nfs_pclose(seL4_CPtr reply)
+{
+    seL4_MessageInfo_t reply_msg = seL4_MessageInfo_new(0, 0, 0, 1);
+    int ret = sos_libnfs_close_async(seL4_GetMR(1), seL4_GetMR(2), seL4_GetMR(3));
+    seL4_SetMR(0, ret);
+    seL4_Send(reply, reply_msg);
 }

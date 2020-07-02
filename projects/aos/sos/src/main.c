@@ -82,7 +82,7 @@
 #define IRQ_EP_BADGE         BIT(seL4_BadgeBits - 1ul)
 #define IRQ_IDENT_BADGE_BITS MASK(seL4_BadgeBits - 1ul)
 
-#define TTY_NAME             "sosh"
+#define TTY_NAME             "m4"
 #define TTY_PRIORITY         (0)
 #define TTY_EP_BADGE         (101)
 
@@ -722,6 +722,7 @@ NORETURN void *main_continued(UNUSED void *arg)
 
     // init file systems
     console_fs_init();
+    grp01_nfs_init();
 
     /* Start the user application */
     printf("Start first process\n");
@@ -734,9 +735,6 @@ NORETURN void *main_continued(UNUSED void *arg)
     // start anything that have to run separate threads here
     bgworker_init();
     start_fake_timer();
-
-    // puts("NFS init");
-    // grp01_nfs_init();
 
     syscall_loop(ipc_ep);
 }

@@ -11,6 +11,7 @@
 #include "utils.h"
 #include "fs/console.h"
 #include "fs/nullfile.h"
+#include "fs/nfs.h"
 #include "bgworker.h"
 #include "ut.h"
 #include "grp01.h"
@@ -54,6 +55,8 @@ struct {
 } specialhandlers[SPECIAL_HANDLERS];
 
 struct filehandler nullhandler;
+
+struct filehandler defaulthandler;
 
 // structs specific for arguments to bgworker
 struct bg_open_param {
@@ -108,6 +111,11 @@ bool fileman_init()
     nullhandler.close = null_fs_close;
     nullhandler.read = null_fs_read;
     nullhandler.write = null_fs_write;
+
+    defaulthandler.open = grp01_nfs_open;
+    defaulthandler.close = NULL; //grp01_nfs_close;
+    defaulthandler.read = grp01_nfs_read;
+    defaulthandler.write = NULL; //grp01_nfs_write;
 
     // install special handlers (console)
     specialhandlers[0].name = "console";
@@ -295,12 +303,8 @@ void bg_fileman_open(seL4_CPtr delegate_ep, void* data)
             break;
         }
     }
-    // we don't have the default handler for now!
-    if(!handler) {
-        ZF_LOGD("Unsupported file system");
-        ret = ENODEV * -1;
-        goto finish;
-    }
+    if(!handler) 
+        handler = &defaulthandler;
 
     // try open
     ssize_t id = handler->open(delegate_ep, filename, param->mode);

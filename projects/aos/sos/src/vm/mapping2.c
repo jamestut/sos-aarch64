@@ -510,7 +510,7 @@ void* userptr_read(userptr_t src, size_t len, seL4_Word badge, seL4_CPtr vspace)
         }
     }
     // our code is designed not to invoke malloc again on scratch space, so ...
-    ZF_LOGF_IF(scratchas.used + 1 >= scratchas.capacity, 
+    ZF_LOGF_IF(scratchas.used >= scratchas.capacity, 
         "Request is going to exceed scratch AS slot.");
 
     // create the AS

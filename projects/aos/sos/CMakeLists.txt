@@ -75,6 +75,7 @@ add_executable(
     src/vm/faulthandler.c
     # GRP01: M4
     src/delegate.c
+    src/fs/nfs.c
 )
 target_include_directories(sos PRIVATE "include" "../libsosapi/include")
 target_link_libraries(
