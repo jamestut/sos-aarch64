@@ -5,8 +5,10 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <grp01/dynaarray.h>
+#include <sos.h>
 
 #include "grp01.h"
+#include "sel4/sel4_arch/types.h"
 #include "ut.h"
 
 // note: for functions that return negative number when they're failing, please
@@ -22,6 +24,22 @@ typedef ssize_t (*file_open_fn)(seL4_CPtr ep, const char* fn, int mode);
 //        len  max length to read/write
 // @return negative if fail, number of bytes read/written if success. 
 typedef ssize_t (*file_rw_fn)(seL4_CPtr ep, ssize_t id, void* ptr, off_t offset, size_t len);
+
+// @param path file to be stat-ed for
+//        out  buffer to hold the stat-ed value, if successful
+// @return negative if fail, 0 if success.
+typedef ssize_t (*file_stat_fn)(seL4_CPtr ep, char* path, sos_stat_t* out);
+
+// @param path   directory to be opened
+// @return negative if fail, ID of directory if success.
+typedef ssize_t (*file_opendir_fn)(seL4_CPtr ep, char* path);
+
+// @param path   directory to be opened
+// @return NULL if fail or end of directory, or pointer to C string of content name if success.
+//         The returned C string is expected to be valid until closedir is called on the id.
+typedef const char* (*file_dirent_fn)(seL4_CPtr ep, ssize_t id, size_t idx);
+
+typedef void (*file_closedir_fn)(seL4_CPtr ep, ssize_t id);
 
 // @param id whatever returned by file_open_fn
 typedef void (*file_close_fn)(seL4_CPtr ep, ssize_t id);
@@ -60,3 +78,11 @@ int fileman_write(seL4_Word pid, seL4_CPtr vspace, int fh, seL4_CPtr reply, ut_t
 //         Result will be replied directly to the client once finishes,
 //         using negative errno semantic.
 int fileman_read(seL4_Word pid, seL4_CPtr vspace, int fh, seL4_CPtr reply, ut_t* reply_ut, userptr_t buff, uint32_t len, dynarray_t* userasarr);
+
+int fileman_stat(seL4_Word pid, seL4_CPtr vspace, seL4_CPtr reply, ut_t* reply_ut, userptr_t filename, size_t filename_len);
+
+int fileman_opendir(seL4_Word pid, seL4_CPtr vspace, seL4_CPtr reply, ut_t* reply_ut, userptr_t filename, size_t filename_len);
+
+int fileman_readdir(seL4_Word pid, seL4_CPtr vspace, int fh, userptr_t buff, size_t bufflen);
+
+int fileman_closedir(seL4_Word pid, int fh);

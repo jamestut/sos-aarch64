@@ -1,11 +1,21 @@
 #pragma once
 
 #include <stdint.h>
+#include <sys/types.h>
+#include <sos.h>
 
-int null_fs_open(const char* fn, int mode);
+ssize_t null_fs_open(seL4_CPtr ep, const char* fn, int mode);
 
-ssize_t null_fs_read(int id, void* ptr, size_t len);
+ssize_t null_fs_read(seL4_CPtr ep, ssize_t id, void* ptr, off_t offset, size_t len);
 
-ssize_t null_fs_write(int id, void* ptr, size_t len);
+ssize_t null_fs_write(seL4_CPtr ep, ssize_t id, void* ptr, off_t offset, size_t len);
 
-void null_fs_close(int id);
+ssize_t null_fs_stat(seL4_CPtr ep, char* path, sos_stat_t* out);
+
+ssize_t null_fs_opendir(seL4_CPtr ep, char* path);
+
+const char* null_fs_dirent(seL4_CPtr ep, ssize_t id, size_t idx);
+
+void null_fs_closedir(seL4_CPtr ep, ssize_t id);
+
+void null_fs_close(seL4_CPtr ep, ssize_t id);

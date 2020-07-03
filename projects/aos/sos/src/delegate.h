@@ -9,6 +9,7 @@
 #include <nfsc/libnfs.h>
 
 #include "grp01.h"
+#include "sel4/sel4_arch/types.h"
 #include "vm/mapping2.h"
 
 // to be called by main!
@@ -42,4 +43,12 @@ int delegate_libnfs_pread_async(seL4_CPtr ep, struct nfsfh *nfsfh,
 int delegate_libnfs_pwrite_async(seL4_CPtr ep, struct nfsfh *nfsfh, uint64_t offset, 
     uint64_t count, const void *buf, nfs_cb cb, void *private_data);
 
+int delegate_libnfs_stat_async(seL4_CPtr ep, const char* path, nfs_cb cb, void* private_data);
+
+int delegate_libnfs_opendir_async(seL4_CPtr ep, const char* path, nfs_cb cb, void* private_data);
+
 int delegate_libnfs_close_async(seL4_CPtr ep, struct nfsfh *nfsfh, nfs_cb cb, void *private_data);
+
+const char* delegate_libnfs_dirent(seL4_CPtr ep, struct nfsdir *nfsdir, size_t idx);
+
+void delegate_libnfs_closedir(seL4_CPtr ep, struct nfsdir *nfsdir);

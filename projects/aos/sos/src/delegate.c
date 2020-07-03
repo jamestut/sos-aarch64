@@ -19,6 +19,10 @@ typedef enum {
     INT_THRDREQ_NFS_OPEN,
     INT_THRDREQ_NFS_PREAD,
     INT_THRDREQ_NFS_PWRITE,
+    INT_THRDREQ_NFS_STAT,
+    INT_THRDREQ_NFS_OPENDIR,
+    INT_THRDREQ_NFS_DIRENT,
+    INT_THRDREQ_NFS_CLOSEDIR,
     INT_THRDREQ_NFS_CLOSE
 } IntThreadReq;
 
@@ -51,7 +55,15 @@ void hdl_nfs_pread(seL4_CPtr reply);
 
 void hdl_nfs_pwrite(seL4_CPtr reply);
 
+void hdl_nfs_stat(seL4_CPtr reply);
+
+void hdl_nfs_opendir(seL4_CPtr reply);
+
 void hdl_nfs_pclose(seL4_CPtr reply);
+
+void hdl_nfs_dirent(seL4_CPtr reply);
+
+void hdl_nfs_closedir(seL4_CPtr reply);
 
 /* ---- definitions start here ---- */
 
@@ -183,6 +195,28 @@ int delegate_libnfs_pwrite_async(seL4_CPtr ep, struct nfsfh *nfsfh, uint64_t off
     return seL4_GetMR(0);
 }
 
+int delegate_libnfs_stat_async(seL4_CPtr ep, const char* path, nfs_cb cb, void* private_data)
+{
+    seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 4);
+    seL4_SetMR(0, INT_THRDREQ_NFS_STAT);
+    seL4_SetMR(1, path);
+    seL4_SetMR(2, cb);
+    seL4_SetMR(3, private_data);
+    seL4_Call(ep, msg);
+    return seL4_GetMR(0);
+}
+
+int delegate_libnfs_opendir_async(seL4_CPtr ep, const char* path, nfs_cb cb, void* private_data)
+{
+    seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 4);
+    seL4_SetMR(0, INT_THRDREQ_NFS_OPENDIR);
+    seL4_SetMR(1, path);
+    seL4_SetMR(2, cb);
+    seL4_SetMR(3, private_data);
+    seL4_Call(ep, msg);
+    return seL4_GetMR(0);
+}
+
 int delegate_libnfs_close_async(seL4_CPtr ep, struct nfsfh *nfsfh, nfs_cb cb, void *private_data)
 {
     seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 4);
@@ -192,6 +226,24 @@ int delegate_libnfs_close_async(seL4_CPtr ep, struct nfsfh *nfsfh, nfs_cb cb, vo
     seL4_SetMR(3, private_data);
     seL4_Call(ep, msg);
     return seL4_GetMR(0);
+}
+
+const char* delegate_libnfs_dirent(seL4_CPtr ep, struct nfsdir *nfsdir, size_t idx)
+{
+    seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 3);
+    seL4_SetMR(0, INT_THRDREQ_NFS_DIRENT);
+    seL4_SetMR(1, nfsdir);
+    seL4_SetMR(2, idx);
+    seL4_Call(ep, msg);
+    return seL4_GetMR(0);
+}
+
+void delegate_libnfs_closedir(seL4_CPtr ep, struct nfsdir *nfsdir)
+{
+    seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 2);
+    seL4_SetMR(0, INT_THRDREQ_NFS_CLOSEDIR);
+    seL4_SetMR(1, nfsdir);
+    seL4_Call(ep, msg);
 }
 
 /* ---- definitions for handler @ main thread ---- */
@@ -259,6 +311,26 @@ void handle_delegate_req(seL4_Word badge, seL4_Word msglen, seL4_CPtr reply, ut_
         case INT_THRDREQ_NFS_PWRITE:
             PARAM_COUNT_CHECK(msglen, 7);
             hdl_nfs_pwrite(reply);
+            break;
+
+        case INT_THRDREQ_NFS_STAT:
+            PARAM_COUNT_CHECK(msglen, 4);
+            hdl_nfs_stat(reply);
+            break;
+
+        case INT_THRDREQ_NFS_OPENDIR:
+            PARAM_COUNT_CHECK(msglen, 4);
+            hdl_nfs_opendir(reply);
+            break;
+
+        case INT_THRDREQ_NFS_DIRENT:
+            PARAM_COUNT_CHECK(msglen, 3);
+            hdl_nfs_dirent(reply);
+            break;
+
+        case INT_THRDREQ_NFS_CLOSEDIR:
+            PARAM_COUNT_CHECK(msglen, 2);
+            hdl_nfs_closedir(reply);
             break;
 
         case INT_THRDREQ_NFS_CLOSE:
@@ -368,10 +440,40 @@ void hdl_nfs_pwrite(seL4_CPtr reply)
     seL4_Send(reply, reply_msg);
 }
 
+void hdl_nfs_stat(seL4_CPtr reply)
+{
+    seL4_MessageInfo_t reply_msg = seL4_MessageInfo_new(0, 0, 0, 1);
+    int ret = sos_libnfs_stat_async(seL4_GetMR(1), seL4_GetMR(2), seL4_GetMR(3));
+    seL4_SetMR(0, ret);
+    seL4_Send(reply, reply_msg);
+}
+
+void hdl_nfs_opendir(seL4_CPtr reply)
+{
+    seL4_MessageInfo_t reply_msg = seL4_MessageInfo_new(0, 0, 0, 1);
+    int ret = sos_libnfs_opendir_async(seL4_GetMR(1), seL4_GetMR(2), seL4_GetMR(3));
+    seL4_SetMR(0, ret);
+    seL4_Send(reply, reply_msg);
+}
+
 void hdl_nfs_pclose(seL4_CPtr reply)
 {
     seL4_MessageInfo_t reply_msg = seL4_MessageInfo_new(0, 0, 0, 1);
     int ret = sos_libnfs_close_async(seL4_GetMR(1), seL4_GetMR(2), seL4_GetMR(3));
     seL4_SetMR(0, ret);
     seL4_Send(reply, reply_msg);
+}
+
+void hdl_nfs_dirent(seL4_CPtr reply)
+{
+    const char* ret = sos_libnfs_readdir(seL4_GetMR(1), seL4_GetMR(2));
+    seL4_MessageInfo_t reply_msg = seL4_MessageInfo_new(0, 0, 0, 1);
+    seL4_SetMR(0, ret);
+    seL4_Send(reply, reply_msg);
+}
+
+void hdl_nfs_closedir(seL4_CPtr reply)
+{
+    sos_libnfs_closedir(seL4_GetMR(1));
+    hdl_do_nothing(reply);
 }

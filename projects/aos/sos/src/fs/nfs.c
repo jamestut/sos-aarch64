@@ -7,7 +7,6 @@
 #include "../backtrace.h"
 
 #include <sys/stat.h>
-#include <sos/gen_config.h>
 #include <sync/mutex.h>
 #include <sync/condition_var.h>
 #include <utils/zf_log_if.h>
@@ -32,6 +31,8 @@ typedef struct {
         // open
         uintptr_t nfsfh;
         void* readtarget;
+        sos_stat_t* stattarget;
+        struct nfsdir* nfsdir;
     } multipurpose;
     sync_cv_t cv;
     sync_bin_sem_t lck;
@@ -41,7 +42,10 @@ typedef enum {
     CMD_OPEN,
     CMD_CLOSE,
     CMD_WRITE,
-    CMD_READ
+    CMD_READ,
+    CMD_STAT,
+    CMD_OPENDIR,
+    CMD_OTHER
 } CmdType;
 
 typedef struct {
@@ -62,15 +66,18 @@ void cb_generic(int status, struct nfs_context *nfs, void *data, void *private_d
 /* ---- util functions ---- */
 size_t acquire_pool(void);
 
+void convert_stat(struct stat* src, sos_stat_t* dst);
+
 void free_pool(size_t idx);
 
 /* ---- macros ---- */
-#define GRP01_NFS_PREAMBLE(paramtype) \
+#define GRP01_NFS_CHECK \
     if(!check_nfs_mount_status()) { \
         ZF_LOGE("NFS mount error"); \
         return -EIO; \
-    } \
-    \
+    }
+
+#define GRP01_NFS_PREAMBLE(paramtype) \
     cbparam_t param; \
     param.poolidx = acquire_pool(); \
     param.type = (paramtype); \
@@ -89,7 +96,6 @@ void free_pool(size_t idx);
 void grp01_nfs_init()
 {
     ZF_LOGI("Initializing GRP01 NFS sync primitives.");
-    int err = 0;
 
     // mutex for the whole pool
     seL4_CPtr ntfn;
@@ -117,6 +123,7 @@ void grp01_nfs_init()
 
 ssize_t grp01_nfs_open(seL4_CPtr ep, const char* fn, int mode)
 {
+    GRP01_NFS_CHECK
     GRP01_NFS_PREAMBLE(CMD_OPEN)
     
     ssize_t ret;
@@ -141,6 +148,7 @@ ssize_t grp01_nfs_open(seL4_CPtr ep, const char* fn, int mode)
 
 ssize_t grp01_nfs_read(seL4_CPtr ep, ssize_t id, void* ptr, off_t offset, size_t len)
 {
+    GRP01_NFS_CHECK
     GRP01_NFS_PREAMBLE(CMD_READ)
     
     ssize_t ret;
@@ -160,6 +168,7 @@ ssize_t grp01_nfs_read(seL4_CPtr ep, ssize_t id, void* ptr, off_t offset, size_t
 
 ssize_t grp01_nfs_write(seL4_CPtr ep, ssize_t id, void* ptr, off_t offset, size_t len)
 {
+    GRP01_NFS_CHECK
     GRP01_NFS_PREAMBLE(CMD_WRITE)
 
     ssize_t ret;
@@ -203,8 +212,75 @@ ssize_t grp01_nfs_write(seL4_CPtr ep, ssize_t id, void* ptr, off_t offset, size_
     return acc;
 }
 
+ssize_t grp01_nfs_stat(seL4_CPtr ep, char* path, sos_stat_t* out)
+{
+    GRP01_NFS_CHECK
+    GRP01_NFS_PREAMBLE(CMD_STAT)
+
+    ssize_t ret;
+    mypool->multipurpose.stattarget = out;
+    ret = delegate_libnfs_stat_async(ep, path, cb_generic, &param);
+    if(ret) {
+        ZF_LOGE("Error retreiving stat");
+        ret = -EIO;
+    } else {
+        GRP01_NFS_WAIT_ASYNC_FINISH
+        ret = mypool->status;
+    }
+
+    free_pool(param.poolidx);
+    return ret;
+}
+
+ssize_t grp01_nfs_opendir(seL4_CPtr ep, char* path)
+{
+    GRP01_NFS_CHECK
+    GRP01_NFS_PREAMBLE(CMD_OPENDIR)
+
+    ssize_t ret;
+    ret = delegate_libnfs_opendir_async(ep, path, cb_generic, &param);
+    if(ret) {
+        ZF_LOGE("Error opening directory");
+        ret = -EIO;
+    } else {
+        GRP01_NFS_WAIT_ASYNC_FINISH
+        ret = mypool->status;
+        if(!ret)
+            ret = mypool->multipurpose.nfsdir;
+    }
+
+    free_pool(param.poolidx);
+    return ret;
+}
+
+const char* grp01_nfs_dirent(seL4_CPtr ep, ssize_t id, size_t pos)
+{
+    if(!check_nfs_mount_status()) {
+        ZF_LOGE("NFS mount error");
+        return NULL;
+    }
+    GRP01_NFS_PREAMBLE(CMD_OTHER)
+
+    return delegate_libnfs_dirent(ep, id, pos);
+}
+
+void grp01_nfs_closedir(seL4_CPtr ep, ssize_t id)
+{
+    if(!check_nfs_mount_status()) {
+        ZF_LOGE("NFS mount error");
+        return;
+    }
+    GRP01_NFS_PREAMBLE(CMD_OTHER)
+
+    delegate_libnfs_closedir(ep, id);
+}
+
 void grp01_nfs_close(seL4_CPtr ep, ssize_t id)
 {
+    if(!check_nfs_mount_status()) {
+        ZF_LOGE("NFS mount error");
+        return;
+    }
     GRP01_NFS_PREAMBLE(CMD_CLOSE)
 
     ssize_t ret;
@@ -233,7 +309,7 @@ void cb_generic(int status, struct nfs_context *nfs, void *data, void *private_d
         // success. actions and return info depends on command!
         switch(param->type) {
             case CMD_OPEN:
-                mypool->multipurpose.nfsfh = data;
+                mypool->multipurpose.nfsfh = (uintptr_t)data;
                 break;
             case CMD_READ:
                 if(status > 0) {
@@ -243,6 +319,12 @@ void cb_generic(int status, struct nfs_context *nfs, void *data, void *private_d
                 break;
             case CMD_WRITE:
             case CMD_CLOSE:
+                break;
+            case CMD_STAT:
+                convert_stat(data, mypool->multipurpose.stattarget);
+                break;
+            case CMD_OPENDIR:
+                mypool->multipurpose.nfsdir = data;
                 break;
             default:
                 // DEBUG. remove assert after finished!
@@ -280,4 +362,20 @@ void free_pool(size_t idx)
     sync_mutex_lock(&pool.lck);
     pool.objs[idx].used = false;
     sync_mutex_unlock(&pool.lck);
+}
+
+/* useless definitions that interferes with our data structure! */
+#undef st_atime
+#undef st_ctime
+
+void convert_stat(struct stat* src, sos_stat_t* dst)
+{
+    dst->st_atime = src->st_atim.tv_sec * 1000 + src->st_atim.tv_nsec / 1000000;
+    dst->st_ctime = src->st_ctim.tv_sec * 1000 + src->st_ctim.tv_nsec / 1000000;
+    dst->st_size = src->st_size;
+
+    dst->st_fmode = ((S_IREAD & src->st_mode) ? FM_READ : 0) |
+        ((S_IWRITE & src->st_mode) ? FM_WRITE : 0) |
+        ((S_IEXEC & src->st_mode) ? FM_EXEC : 0);
+    dst->st_type = S_ISREG(src->st_mode) ? ST_FILE : ST_SPECIAL; 
 }

@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <sys/types.h>
+#include <sos.h>
 
 void console_fs_init(void);
 

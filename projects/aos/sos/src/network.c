@@ -352,7 +352,31 @@ int sos_libnfs_pwrite_async(struct nfsfh *nfsfh, uint64_t offset,
     return nfs_pwrite_async(nfs, nfsfh, offset, count, buf, cb, private_data);
 }
 
+int sos_libnfs_stat_async(const char *path, nfs_cb cb, void *private_data)
+{
+    return nfs_stat_async(nfs, path, cb, private_data);
+}
+
+int sos_libnfs_opendir_async(const char *path, nfs_cb cb, void *private_data)
+{
+    return nfs_opendir_async(nfs, path, cb, private_data);
+}
+
 int sos_libnfs_close_async(struct nfsfh *nfsfh, nfs_cb cb, void *private_data)
 {
     return nfs_close_async(nfs, nfsfh, cb, private_data);
+}
+
+const char* sos_libnfs_readdir(struct nfsdir *nfsdir, size_t pos)
+{
+    nfs_seekdir(nfs, nfsdir, pos);
+    struct nfsdirent * ent = nfs_readdir(nfs, nfsdir);
+    if(!ent)
+        return NULL;
+    return ent->name;
+}
+
+void sos_libnfs_closedir(struct nfsdir *nfsfh)
+{
+    nfs_closedir(nfs, nfsfh);
 }

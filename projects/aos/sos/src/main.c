@@ -178,6 +178,11 @@ void handle_syscall(seL4_Word badge, seL4_CPtr reply, ut_t* reply_ut)
             seL4_GetMR(2), seL4_GetMR(3), &pt->as);
         break;
 
+    case SOS_SYSCALL_STAT:
+        handler_ret = fileman_stat(badge, pt->vspace, reply, reply_ut, seL4_GetMR(1),
+            seL4_GetMR(2));
+        break;
+
     case SOS_SYSCALL_MMAP:
         handler_ret = handle_mmap(&pt->as, seL4_GetMR(1), seL4_GetMR(2), seL4_GetMR(3), 
             seL4_GetMR(4), seL4_GetMR(5), seL4_GetMR(6));
