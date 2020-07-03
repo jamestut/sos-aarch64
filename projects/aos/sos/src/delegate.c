@@ -19,7 +19,8 @@ typedef enum {
     INT_THRDREQ_NFS_OPEN,
     INT_THRDREQ_NFS_PREAD,
     INT_THRDREQ_NFS_PWRITE,
-    INT_THRDREQ_NFS_CLOSE
+    INT_THRDREQ_NFS_CLOSE,
+    INT_THRDREQ_NFS_OPENDIR
 } IntThreadReq;
 
 /* ---- common declarations ---- */
@@ -52,6 +53,8 @@ void hdl_nfs_pread(seL4_CPtr reply);
 void hdl_nfs_pwrite(seL4_CPtr reply);
 
 void hdl_nfs_pclose(seL4_CPtr reply);
+
+void hdl_nfs_opendir(seL4_CPtr reply);
 
 /* ---- definitions start here ---- */
 
@@ -194,6 +197,19 @@ int delegate_libnfs_close_async(seL4_CPtr ep, struct nfsfh *nfsfh, nfs_cb cb, vo
     return seL4_GetMR(0);
 }
 
+int delegate_libnfs_opendir_async(seL4_CPtr ep, const char* path, nfs_cb cb, void *private_data) 
+{   
+    seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 4);
+    seL4_SetMR(0, INT_THRDREQ_NFS_OPENDIR);
+    seL4_SetMR(1, path);
+    seL4_SetMR(2, cb);
+    seL4_SetMR(3, private_data);
+    seL4_Call(ep, msg);
+    return seL4_GetMR(0);
+}
+
+
+
 /* ---- definitions for handler @ main thread ---- */
 
 void handle_delegate_req(seL4_Word badge, seL4_Word msglen, seL4_CPtr reply, ut_t* reply_ut)
@@ -266,6 +282,11 @@ void handle_delegate_req(seL4_Word badge, seL4_Word msglen, seL4_CPtr reply, ut_
             hdl_nfs_pclose(reply);
             break;
         
+        case INT_THRDREQ_NFS_OPENDIR:
+            PARAM_COUNT_CHECK(msglen, 4);
+            hdl_nfs_opendir(reply);
+            break;
+
         default:
             ZF_LOGF("Unknown request code!");
     }
@@ -372,6 +393,14 @@ void hdl_nfs_pclose(seL4_CPtr reply)
 {
     seL4_MessageInfo_t reply_msg = seL4_MessageInfo_new(0, 0, 0, 1);
     int ret = sos_libnfs_close_async(seL4_GetMR(1), seL4_GetMR(2), seL4_GetMR(3));
+    seL4_SetMR(0, ret);
+    seL4_Send(reply, reply_msg);
+}
+
+void hdl_nfs_opendir(seL4_CPtr reply)
+{
+    seL4_MessageInfo_t reply_msg = seL4_MessageInfo_new(0, 0, 0, 1);
+    int ret = sos_libnfs_opendir_async(seL4_GetMR(1),  seL4_GetMR(2), seL4_GetMR(3));
     seL4_SetMR(0, ret);
     seL4_Send(reply, reply_msg);
 }

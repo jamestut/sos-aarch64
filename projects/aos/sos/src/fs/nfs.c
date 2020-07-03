@@ -41,7 +41,8 @@ typedef enum {
     CMD_OPEN,
     CMD_CLOSE,
     CMD_WRITE,
-    CMD_READ
+    CMD_READ,
+    CMD_OPENDIR
 } CmdType;
 
 typedef struct {
@@ -220,6 +221,46 @@ void grp01_nfs_close(seL4_CPtr ep, ssize_t id)
     free_pool(param.poolidx);
 }
 
+ssize_t grp01_nfs_getdirent(seL4_CPtr ep, int pos, const char* path, size_t nbyte, size_t *entry_size) {
+    // param set here
+    GRP01_NFS_PREAMBLE(CMD_OPENDIR)
+
+    // no err we will return 0, the entry size will be stored in a ptr passed in
+    ssize_t  ret = 0;
+    struct nfsdirent *entry = malloc(sizeof(struct nfsdirent));
+    
+    // we use this addr for storing the dir entry data
+    mypool->multipurpose.readtarget = entry;
+    
+    // gp01 DEBUG
+    // printf("malloc for entry at %p, malloc for mypool at %p\n", entry, mypool->multipurpose.readtarget);
+
+    ret = delegate_libnfs_opendir_async(ep, path, cb_generic, &param);
+    if (ret) {
+        ZF_LOGE("Error opening NFS dir.");
+        
+    } else {
+        GRP01_NFS_WAIT_ASYNC_FINISH
+        if (mypool->status) {
+            ZF_LOGE("NFS open dir failed with err code %d", mypool->status);
+            ret = mypool->status;
+        }
+
+        entry = (struct nfsdirent*) mypool->multipurpose.readtarget;
+        for (int i = 0 ; i < pos; i++) {
+            entry = entry->next;
+        }
+
+        if (entry != NULL) {
+            *entry_size = entry->size;
+            printf("entry name: %s, size: %lld\n",entry->name, entry->size);
+        }
+    }
+
+    free_pool(param.poolidx);
+    return ret;
+}
+
 void cb_generic(int status, struct nfs_context *nfs, void *data, void *private_data)
 {
     cbparam_t* param = private_data;
@@ -243,6 +284,24 @@ void cb_generic(int status, struct nfs_context *nfs, void *data, void *private_d
                 break;
             case CMD_WRITE:
             case CMD_CLOSE:
+                break;
+            case CMD_OPENDIR:
+                printf("open dir successfully\n");
+                
+                // here we need to read the dir and store the dir data in the structure
+                struct nfsdir *nfsdir = data;
+                struct nfsdirent *entry = malloc(sizeof(struct nfsdirent));
+                
+                sos_libnfs_read_dir(&entry,nfsdir);
+                memcpy(mypool->multipurpose.readtarget, entry, sizeof(struct nfsdirent));
+
+                // gp01 DEBUG 
+                // printf("In the call back malloc for mypool at %p, entry at %p\n", mypool->multipurpose.readtarget, entry);
+                // printf("after copy entry name is: %s\n", entry->name);
+                // printf("after copy mypool entry name is: %s\n", ((struct nfsdirent *)mypool->multipurpose.readtarget)->name);
+                
+                // dont close the dir before copy the whole entry out!
+                sos_libnfs_close_dir(nfsdir);
                 break;
             default:
                 // DEBUG. remove assert after finished!

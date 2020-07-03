@@ -79,7 +79,13 @@ int sos_sys_write(int file, const char *buf, size_t nbyte)
 
 int sos_getdirent(int pos, char *name, size_t nbyte)
 {
-    return sos_sys_not_implemented();
+    seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, 4);
+    seL4_SetMR(0, SOS_SYSCALL_DIRENT);
+    seL4_SetMR(1, pos);
+    seL4_SetMR(2, name);
+    seL4_SetMR(3, nbyte);
+    seL4_Call(SOS_IPC_EP_CAP, msginfo);
+    return seL4_GetMR(0);
 }
 
 int sos_stat(const char *path, sos_stat_t *buf)

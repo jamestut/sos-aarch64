@@ -26,6 +26,9 @@ typedef ssize_t (*file_rw_fn)(seL4_CPtr ep, ssize_t id, void* ptr, off_t offset,
 // @param id whatever returned by file_open_fn
 typedef void (*file_close_fn)(seL4_CPtr ep, ssize_t id);
 
+// TODO: for later use, implementing a generic interface for dir only
+typedef ssize_t (*file_getdirent_fn)(seL4_CPtr ep, int pos, const char* path, size_t nbyte);
+
 // initialize file table manager.
 // call once when SOS is starting up.
 // @param p_cspace pointer to cspace shared with eventloop handler.
@@ -60,3 +63,9 @@ int fileman_write(seL4_Word pid, seL4_CPtr vspace, int fh, seL4_CPtr reply, ut_t
 //         Result will be replied directly to the client once finishes,
 //         using negative errno semantic.
 int fileman_read(seL4_Word pid, seL4_CPtr vspace, int fh, seL4_CPtr reply, ut_t* reply_ut, userptr_t buff, uint32_t len, dynarray_t* userasarr);
+
+// get the direntry from underlying FS
+// @return errno if failed, 0 if pending
+//         Result will be directly passedto client once finishes,
+//         using negative errno semantic.  
+int fileman_getdirent (seL4_Word pid, seL4_CPtr vspace, seL4_CPtr reply, ut_t* reply_ut, int fh, userptr_t path, size_t path_len);

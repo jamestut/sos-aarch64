@@ -43,3 +43,5 @@ int delegate_libnfs_pwrite_async(seL4_CPtr ep, struct nfsfh *nfsfh, uint64_t off
     uint64_t count, const void *buf, nfs_cb cb, void *private_data);
 
 int delegate_libnfs_close_async(seL4_CPtr ep, struct nfsfh *nfsfh, nfs_cb cb, void *private_data);
+
+int delegate_libnfs_opendir_async(seL4_CPtr ep, const char* path, nfs_cb cb, void *private_data);

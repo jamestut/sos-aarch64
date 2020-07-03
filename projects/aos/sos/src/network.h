@@ -41,3 +41,9 @@ int sos_libnfs_pwrite_async(struct nfsfh *nfsfh, uint64_t offset,
     uint64_t count, const void *buf, nfs_cb cb, void *private_data);
 
 int sos_libnfs_close_async(struct nfsfh *nfsfh, nfs_cb cb, void *private_data);
+
+int sos_libnfs_opendir_async(const char *path, nfs_cb cb, void * private_data);
+
+void sos_libnfs_read_dir(struct nfsdirent **nfsdirent, struct nfsdir *nfsdir);
+
+void sos_libnfs_close_dir(struct nfsdir *nfsdir);

@@ -31,6 +31,7 @@ struct filehandler
     file_rw_fn read;
     file_rw_fn write;
     file_close_fn close;
+    file_getdirent_fn getdirent;
 };
 
 struct fileentry
@@ -89,6 +90,16 @@ struct bg_close_param {
     ut_t* reply_ut;
 };
 
+struct bg_dir_param {
+    seL4_Word pid;
+    seL4_CPtr vspace;
+    seL4_CPtr reply;
+    ut_t* reply_ut;
+    userptr_t path;
+    uint32_t len;
+    int pos;  
+};
+
 // local variables declaration area
 
 struct filetable ft[MAX_PID];
@@ -98,6 +109,7 @@ void send_and_free_reply_cap(seL4_CPtr delegate_ep, ssize_t response, seL4_CPtr 
 void bg_fileman_open(seL4_CPtr delegate_ep, void* data);
 void bg_fileman_rw(seL4_CPtr delegate_ep, void* data);
 void bg_fileman_close(seL4_CPtr delegate_ep, void* data);
+void bg_fileman_getdirent(seL4_CPtr delegate_ep, void* data);
 int fileman_rw_dispatch(bool read, seL4_Word pid, seL4_CPtr vspace, int fh, seL4_CPtr reply, ut_t* reply_ut, userptr_t buff, uint32_t len, dynarray_t* userasarr);
 ssize_t fileman_write_broker(seL4_CPtr delegate_ep, struct filehandler* fh, ssize_t id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len, off_t offset);
 ssize_t fileman_read_broker(seL4_CPtr delegate_ep, dynarray_t* userasarr, struct filehandler* fh, ssize_t id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len, off_t offset);
@@ -117,6 +129,7 @@ bool fileman_init()
     defaulthandler.close = grp01_nfs_close;
     defaulthandler.read = grp01_nfs_read;
     defaulthandler.write = grp01_nfs_write;
+    // defaulthandler.getdirent = grp01_nfs_getdirent;
 
     // install special handlers (console)
     specialhandlers[0].name = "console";
@@ -443,4 +456,53 @@ ssize_t fileman_read_broker(seL4_CPtr delegate_ep, dynarray_t* userasarr, struct
     delegate_userptr_unmap(delegate_ep, startptr);
     
     return ret;
+}
+
+void bg_fileman_getdirent(seL4_CPtr delegate_ep, void* data)
+{
+    struct bg_dir_param * param = data;
+    struct filetable* pft = ft + param->pid;
+    ssize_t ret = 0;
+    size_t direntry_size = 0;
+    
+    if (!param || !pft || !pft->used) {
+        ZF_LOGF("We have a huge bug here, memory corrupted or concurrency issue?");
+    }
+
+    sync_mutex_lock(&pft->felock);
+    
+    ret = grp01_nfs_getdirent(delegate_ep, param->pos, param->path, param->len, &direntry_size);
+    if (ret) {
+        ZF_LOGE("get direntry failed with err: %d\n", ret);
+    }
+
+    // finish:
+    sync_mutex_unlock(&pft->felock);
+    send_and_free_reply_cap(delegate_ep, direntry_size, param->reply, param->reply_ut);
+    delegate_free(delegate_ep, param);
+}
+
+int fileman_getdirent (seL4_Word pid, seL4_CPtr vspace, seL4_CPtr reply, ut_t* reply_ut, int pos, userptr_t path, size_t path_len) {
+    if ((pid >= MAX_PID) || !vspace || !ft[pid].used) {
+        return EBADF * -1;
+    }
+
+    // prepare and run in the bg
+    struct bg_dir_param *param = malloc(sizeof(struct bg_dir_param));
+    if (param == NULL) {
+        ZF_LOGE("create bg_dir param failed.");
+        return ENOMEM * -1;
+    }
+
+    param->vspace = vspace;
+    param->reply = reply;
+    param->reply_ut = reply_ut;
+    param->len = path_len;
+    param->pid = pid;
+    param->pos = pos;
+    param->path = path;
+
+    // put in queue
+    bgworker_enqueue_callback(bg_fileman_getdirent, param);
+    return 0;
 }

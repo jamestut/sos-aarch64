@@ -356,3 +356,39 @@ int sos_libnfs_close_async(struct nfsfh *nfsfh, nfs_cb cb, void *private_data)
 {
     return nfs_close_async(nfs, nfsfh, cb, private_data);
 }
+
+int sos_libnfs_opendir_async(const char *path, nfs_cb cb, void * private_data) 
+{
+    (void) *path;
+    // make sure the path is '' or SOS_PATH, because we are using flat FS
+    return nfs_opendir_async(nfs, "", cb, private_data);
+}
+
+void sos_libnfs_read_dir(struct nfsdirent **nfsdirent, struct nfsdir *nfsdir)
+{ 
+    // gp01 DEBUG
+    // printf("in the read func entry at: %p contain ptr %p\n", *nfsdirent);
+    
+    *nfsdirent = nfs_readdir(nfs, nfsdir);
+    
+    // gp01 DEBUG
+    // struct nfsdirent *old = nfsdirent;
+    
+    if (*nfsdirent != NULL) {
+        printf("First Inode:%d Name:%s Size:%llu\n", (int)(*nfsdirent)->inode, (*nfsdirent)->name, (*nfsdirent)->size);
+    }
+
+    // // gp01 DEBUG
+    // while (nfsdirent) {
+    //     printf("Inode:%d Name:%s Size:%llu\n", (int)nfsdirent->inode, nfsdirent->name, nfsdirent->size);
+    //     nfsdirent = nfsdirent->next;
+    // }
+
+    // nfsdirent = old;
+}
+
+void sos_libnfs_close_dir(struct nfsdir *nfsdir) 
+{
+    nfs_closedir(nfs, nfsdir);
+}
+

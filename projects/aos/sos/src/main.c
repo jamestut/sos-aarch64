@@ -82,7 +82,7 @@
 #define IRQ_EP_BADGE         BIT(seL4_BadgeBits - 1ul)
 #define IRQ_IDENT_BADGE_BITS MASK(seL4_BadgeBits - 1ul)
 
-#define TTY_NAME             "m4"
+#define TTY_NAME             "sosh"
 #define TTY_PRIORITY         (0)
 #define TTY_EP_BADGE         (101)
 
@@ -203,12 +203,19 @@ void handle_syscall(seL4_Word badge, seL4_CPtr reply, ut_t* reply_ut)
         handler_ret = ts_get_timestamp();
         break;
 
+    case SOS_SYSCALL_DIRENT:
+        // gp01 DEBUG
+        // puts("system call get dirent");
+        
+        handler_ret = fileman_getdirent(badge, pt->vspace, reply, reply_ut, seL4_GetMR(1), seL4_GetMR(2), seL4_GetMR(3));
+        break;
+    
     case SOS_SYSCALL_UNIMPLEMENTED:
         // just print this message as specified :)
         puts("system call not implemented");
         handler_ret = 1;
         break;
-        
+
     default:
         ZF_LOGE("Unknown syscall %lu\n", syscall_number);
     }
