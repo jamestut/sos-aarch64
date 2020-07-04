@@ -130,7 +130,12 @@ int sos_getdirent(int pos, char *name, size_t nbyte)
     if(dirfh < 0)
         return dirfh;
     
-    return sos_sys_getdirent_f(dirfh, pos, name, nbyte);
+    int ret = sos_sys_getdirent_f(dirfh, pos, name, nbyte);
+    if(ret == 0) {
+        sos_sys_close(dirfh);
+        dirfh = -1;
+    }
+    return ret;
 }
 
 int sos_stat(const char *path, sos_stat_t *buf)

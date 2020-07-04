@@ -14,6 +14,7 @@
 #include <errno.h>
 #include <poll.h>
 #include <utils/arith.h>
+#include <fcntl.h>
 
 // otherwise libnfs will complain about not enough memory
 #define MAX_LIBNFS_CHUNK 8192
@@ -127,7 +128,9 @@ ssize_t grp01_nfs_open(seL4_CPtr ep, const char* fn, int mode)
     GRP01_NFS_PREAMBLE(CMD_OPEN)
     
     ssize_t ret;
-    ret = delegate_libnfs_open_async(ep, fn, mode, cb_generic, &param);
+    // we intentionally include O_CREAT here as sosh doesn't pass this flag
+    // otherwise, cp on unmodified sosh will fail
+    ret = delegate_libnfs_open_async(ep, fn, mode | O_CREAT, cb_generic, &param);
     if(ret) {
         ZF_LOGI("Error initializing NFS open.");
         ret = -EIO;

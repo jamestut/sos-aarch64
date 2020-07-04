@@ -5,8 +5,8 @@
 #include <stdio.h>
 #include <sys/mman.h>
 
-#define FILENAME "Catalina.heic"
-#define BUFFSZ 5000000
+#define FILENAME "random.dat"
+#define BUFFSZ 100000
 
 void doit()
 {
