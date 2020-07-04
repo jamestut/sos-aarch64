@@ -27,11 +27,56 @@
 int sos_errno = 0;
 char debugstr[4096];
 
+// because of flat file structure, we will cache the dir handle :)
+int dirfh = -1;
+
 inline int sos_sys_rw(bool read, int file, char *buf, size_t nbyte);
 
 int sos_sys_not_implemented(void);
 
 void sos_debug_printf(const char* str, ...);
+
+int sos_sys_opendir(const char* path)
+{
+    uint32_t len = strnlen(path, MAX_IO_BUF);
+    if(len >= MAX_IO_BUF) {
+        sos_errno = ENAMETOOLONG;
+        return -1;
+    }
+
+    seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, 3);
+    seL4_SetMR(0, SOS_SYSCALL_OPENDIR);
+    seL4_SetMR(1, path);
+    seL4_SetMR(2, len);
+
+    msginfo = seL4_Call(SOS_IPC_EP_CAP, msginfo);
+
+    ssize_t ret = seL4_GetMR(0);
+    if(ret < 0) {
+        sos_errno = ret * -1;
+        return -1;
+    }
+    return ret;
+}
+
+int sos_sys_getdirent_f(int fh, int pos, char *name, size_t nbyte)
+{
+    // request pos-th dir entry
+    seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, 5);
+    seL4_SetMR(0, SOS_SYSCALL_DIRREAD);
+    seL4_SetMR(1, fh);
+    seL4_SetMR(2, pos);
+    seL4_SetMR(3, name);
+    seL4_SetMR(4, nbyte);
+
+    seL4_Call(SOS_IPC_EP_CAP, msginfo);
+    int ret = seL4_GetMR(0);
+    if(ret < 0) {
+        sos_errno = ret * -1;
+        return -1;
+    }
+    return ret;
+}
 
 int sos_sys_open(const char *path, fmode_t mode)
 {
@@ -79,12 +124,44 @@ int sos_sys_write(int file, const char *buf, size_t nbyte)
 
 int sos_getdirent(int pos, char *name, size_t nbyte)
 {
-    return sos_sys_not_implemented();
+    if(dirfh < 0)
+        dirfh = sos_sys_opendir("/");
+    // error!
+    if(dirfh < 0)
+        return dirfh;
+    
+    int ret = sos_sys_getdirent_f(dirfh, pos, name, nbyte);
+    if(ret == 0) {
+        sos_sys_close(dirfh);
+        dirfh = -1;
+    }
+    return ret;
 }
 
 int sos_stat(const char *path, sos_stat_t *buf)
 {
-    return sos_sys_not_implemented();
+    uint32_t len = strnlen(path, MAX_IO_BUF);
+
+    if(len >= MAX_IO_BUF) {
+        sos_errno = ENAMETOOLONG;
+        return -1;
+    }
+
+    seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, 3);
+    seL4_SetMR(0, SOS_SYSCALL_STAT);
+    seL4_SetMR(1, path);
+    seL4_SetMR(2, len);
+    
+    msginfo = seL4_Call(SOS_IPC_EP_CAP, msginfo);
+
+    ssize_t ret = seL4_GetMR(0);
+    if(ret < 0) {
+        sos_errno = ret * -1;
+        return -1;
+    } else {
+        memcpy(buf, seL4_GetIPCBuffer()->msg + 1, sizeof(sos_stat_t));
+        return 0;
+    }
 }
 
 pid_t sos_process_create(const char *path)

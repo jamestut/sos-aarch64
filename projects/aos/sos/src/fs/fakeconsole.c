@@ -7,6 +7,8 @@
 #include <string.h>
 #include <utils/arith.h>
 
+#include "console.h"
+
 #ifndef CONFIG_PLAT_ODROIDC2
 
 #define FAKE_READ_LIMIT UINT64_MAX
@@ -16,7 +18,7 @@ void console_fs_init(void)
     ZF_LOGI("fake console initialized.");
 }
 
-int32_t console_fs_read(int id, void* ptr, size_t len)
+ssize_t console_fs_read(seL4_CPtr ep, ssize_t id, void* ptr, off_t offset, size_t len)
 {
     static int charidx = 0;
 
@@ -31,7 +33,7 @@ int32_t console_fs_read(int id, void* ptr, size_t len)
     return toread;
 }
 
-int32_t console_fs_write(int id, void* ptr, size_t len)
+ssize_t console_fs_write(seL4_CPtr ep, ssize_t id, void* ptr, off_t offset, size_t len)
 {
     // print to tty :)
     char* cptr = ptr;

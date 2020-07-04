@@ -64,6 +64,9 @@
 #include "vm/addrspace.h"
 #include "vm/syshandlers.h"
 #include "vm/faulthandler.h"
+// GRP01: M4
+#include "delegate.h"
+#include "fs/nfs.h"
 
 #include <aos/vsyscall.h>
 
@@ -79,7 +82,7 @@
 #define IRQ_EP_BADGE         BIT(seL4_BadgeBits - 1ul)
 #define IRQ_IDENT_BADGE_BITS MASK(seL4_BadgeBits - 1ul)
 
-#define TTY_NAME             "tty_test"
+#define TTY_NAME             "sosh"
 #define TTY_PRIORITY         (0)
 #define TTY_EP_BADGE         (101)
 
@@ -158,7 +161,7 @@ void handle_syscall(seL4_Word badge, seL4_CPtr reply, ut_t* reply_ut)
     switch (syscall_number) {
     case SOS_SYSCALL_OPEN:
         handler_ret = fileman_open(badge, pt->vspace, reply, reply_ut, 
-            seL4_GetMR(1), seL4_GetMR(2), seL4_GetMR(3));
+            seL4_GetMR(1), seL4_GetMR(2), false, seL4_GetMR(3));
         break;
     
     case SOS_SYSCALL_CLOSE:
@@ -173,6 +176,21 @@ void handle_syscall(seL4_Word badge, seL4_CPtr reply, ut_t* reply_ut)
     case SOS_SYSCALL_WRITE: 
         handler_ret = fileman_write(badge, pt->vspace, seL4_GetMR(1), reply, reply_ut, 
             seL4_GetMR(2), seL4_GetMR(3), &pt->as);
+        break;
+
+    case SOS_SYSCALL_STAT:
+        handler_ret = fileman_stat(badge, pt->vspace, reply, reply_ut, seL4_GetMR(1),
+            seL4_GetMR(2));
+        break;
+
+    case SOS_SYSCALL_OPENDIR:
+        handler_ret = fileman_open(badge, pt->vspace, reply, reply_ut, 
+            seL4_GetMR(1), seL4_GetMR(2), true, 0);
+        break;
+
+    case SOS_SYSCALL_DIRREAD:
+        handler_ret = fileman_readdir(badge, pt->vspace, seL4_GetMR(1), reply, reply_ut,
+            seL4_GetMR(2), seL4_GetMR(3), seL4_GetMR(4), &pt->as);
         break;
 
     case SOS_SYSCALL_MMAP:
@@ -293,6 +311,7 @@ NORETURN void syscall_loop(seL4_CPtr ep)
         /* Awake! We got a message - check the label and badge to
          * see what the message is about */
         seL4_Word label = seL4_MessageInfo_get_label(message);
+        seL4_Word msglen = seL4_MessageInfo_get_length(message);
 
         if (badge & IRQ_EP_BADGE) {
             /* It's a notification from our bound notification
@@ -303,7 +322,12 @@ NORETURN void syscall_loop(seL4_CPtr ep)
              * message from tty_test! */
             // pass the reply_ut also so that we can tell ut that the reply object is no
             // longer used
-            handle_syscall(badge, reply, reply_ut);
+            if(badge & INT_THRD_BADGE_FLAG)
+                // must be a delegate request from SOS' non main threads
+                handle_delegate_req(badge, msglen, reply, reply_ut);
+            else
+                // from user app
+                handle_syscall(badge, reply, reply_ut);
             // indicate to the next loop that we used this reply object
             reply_ut = NULL;
         } else {
@@ -701,7 +725,6 @@ NORETURN void *main_continued(UNUSED void *arg)
 
     /* Initialise the network hardware. (meson ethernet for now) */
     #ifdef CONFIG_PLAT_ODROIDC2
-    // TODO: reenable ethernet (this is disabled to make debugging quicker)
     printf("Network init\n");
     network_init(&cspace, timer_vaddr, ntfn);
     #endif
@@ -714,6 +737,7 @@ NORETURN void *main_continued(UNUSED void *arg)
 
     // init file systems
     console_fs_init();
+    grp01_nfs_init();
 
     /* Start the user application */
     printf("Start first process\n");
@@ -725,7 +749,7 @@ NORETURN void *main_continued(UNUSED void *arg)
 
     // start anything that have to run separate threads here
     bgworker_init();
-    //start_fake_timer();
+    start_fake_timer();
 
     syscall_loop(ipc_ep);
 }

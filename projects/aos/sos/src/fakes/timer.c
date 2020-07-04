@@ -12,7 +12,7 @@ void timer_ticker(void* unused);
 void start_fake_timer()
 {
     if(!started) {
-        thread_create(timer_ticker, NULL, 0, true);
+        spawn(timer_ticker, NULL, "fake_timer", 0);
         started = true;
         ZF_LOGI("Fake timer started!");
     }

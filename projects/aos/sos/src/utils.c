@@ -37,7 +37,7 @@ ut_t *alloc_retype(seL4_CPtr *cptr, seL4_Word type, size_t size_bits)
 
     /* now do the retype */
     seL4_Error err = cspace_untyped_retype(&cspace, ut->cap, *cptr, type, size_bits);
-    ZF_LOGE_IFERR(err, "Failed retype untyped");
+    ZF_LOGE_IFERR(err, "Failed retype untyped from %llu to %llu type %d", ut->cap, *cptr, type);
     if (err != seL4_NoError) {
         ut_free(ut);
         cspace_free_slot(&cspace, *cptr);

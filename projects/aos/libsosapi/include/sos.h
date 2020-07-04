@@ -159,4 +159,8 @@ int sos_share_vm(void *adr, size_t size, int writable);
 //GRP01's addon
 extern int sos_errno;
 
+int sos_sys_opendir(const char* path);
+
+int sos_sys_getdirent_f(int fh, int pos, char *name, size_t nbyte);
+
 void* sos_large_ipc_buffer(void);

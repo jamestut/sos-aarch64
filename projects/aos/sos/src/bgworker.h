@@ -1,8 +1,8 @@
 #pragma once
 
-#define BACKEND_HANDLER_BADGE (10)
+#include "grp01.h"
 
-typedef void (*bgworker_callback_fn)(void*);
+typedef void (*bgworker_callback_fn)(seL4_CPtr delegate_ep, void* data);
 
 // initialize the backend thread
 void bgworker_init();
