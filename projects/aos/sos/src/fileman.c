@@ -22,7 +22,7 @@
 #include "fileman.h"
 
 #define MAX_FH  128
-#define SPECIAL_HANDLERS 2
+#define SPECIAL_HANDLERS 1
 
 // WARNING! double eval!
 #define DIV_ROUND_UP_CEXPR(n,d) \
