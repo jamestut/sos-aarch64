@@ -11,6 +11,7 @@
 #define SOS_SYSCALL_MUNMAP       11
 #define SOS_SYSCALL_BRK          12
 #define SOS_SYSCALL_USLEEP       35 // equivalent to linux's nanosleep
-#define SOS_SYSCALL_DIRENT       78
 #define SOS_SYSCALL_TIMESTAMP   201 // linux's time 
 #define SOS_SYSCALL_GROW_STACK 1001
+#define SOS_SYSCALL_OPENDIR    1781
+#define SOS_SYSCALL_DIRREAD    1782

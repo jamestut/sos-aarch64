@@ -76,6 +76,7 @@ add_executable(
     # GRP01: M4
     src/delegate.c
     src/fs/nfs.c
+    src/fs/fake.c
 )
 target_include_directories(sos PRIVATE "include" "../libsosapi/include")
 target_link_libraries(

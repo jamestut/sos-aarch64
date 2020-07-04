@@ -261,7 +261,10 @@ const char* grp01_nfs_dirent(seL4_CPtr ep, ssize_t id, size_t pos)
     }
     GRP01_NFS_PREAMBLE(CMD_OTHER)
 
-    return delegate_libnfs_dirent(ep, id, pos);
+    const char* ret = delegate_libnfs_dirent(ep, id, pos);
+
+    free_pool(param.poolidx);
+    return ret;
 }
 
 void grp01_nfs_closedir(seL4_CPtr ep, ssize_t id)
@@ -273,6 +276,7 @@ void grp01_nfs_closedir(seL4_CPtr ep, ssize_t id)
     GRP01_NFS_PREAMBLE(CMD_OTHER)
 
     delegate_libnfs_closedir(ep, id);
+    free_pool(param.poolidx);
 }
 
 void grp01_nfs_close(seL4_CPtr ep, ssize_t id)

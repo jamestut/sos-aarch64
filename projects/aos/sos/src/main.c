@@ -82,7 +82,7 @@
 #define IRQ_EP_BADGE         BIT(seL4_BadgeBits - 1ul)
 #define IRQ_IDENT_BADGE_BITS MASK(seL4_BadgeBits - 1ul)
 
-#define TTY_NAME             "m4"
+#define TTY_NAME             "sosh"
 #define TTY_PRIORITY         (0)
 #define TTY_EP_BADGE         (101)
 
@@ -161,7 +161,7 @@ void handle_syscall(seL4_Word badge, seL4_CPtr reply, ut_t* reply_ut)
     switch (syscall_number) {
     case SOS_SYSCALL_OPEN:
         handler_ret = fileman_open(badge, pt->vspace, reply, reply_ut, 
-            seL4_GetMR(1), seL4_GetMR(2), seL4_GetMR(3));
+            seL4_GetMR(1), seL4_GetMR(2), false, seL4_GetMR(3));
         break;
     
     case SOS_SYSCALL_CLOSE:
@@ -181,6 +181,16 @@ void handle_syscall(seL4_Word badge, seL4_CPtr reply, ut_t* reply_ut)
     case SOS_SYSCALL_STAT:
         handler_ret = fileman_stat(badge, pt->vspace, reply, reply_ut, seL4_GetMR(1),
             seL4_GetMR(2));
+        break;
+
+    case SOS_SYSCALL_OPENDIR:
+        handler_ret = fileman_open(badge, pt->vspace, reply, reply_ut, 
+            seL4_GetMR(1), seL4_GetMR(2), true, 0);
+        break;
+
+    case SOS_SYSCALL_DIRREAD:
+        handler_ret = fileman_readdir(badge, pt->vspace, seL4_GetMR(1), reply, reply_ut,
+            seL4_GetMR(2), seL4_GetMR(3), seL4_GetMR(4), &pt->as);
         break;
 
     case SOS_SYSCALL_MMAP:
