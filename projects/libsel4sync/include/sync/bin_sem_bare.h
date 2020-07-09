@@ -36,7 +36,7 @@ static inline int sync_bin_sem_bare_wait(seL4_CPtr notification, volatile int *v
         /* Even though we performed an acquire barrier during the atomic
          * decrement we did not actually have the lock yet, so we have
          * to do another one now */
-        __atomic_thread_fence(__ATOMIC_ACQUIRE);
+        __atomic_thread_fence(__ATOMIC_SEQ_CST);
     }
     return 0;
 }

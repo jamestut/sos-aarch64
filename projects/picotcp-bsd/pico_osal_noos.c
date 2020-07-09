@@ -26,7 +26,7 @@
 
 struct osal_mutex {
     volatile int want_to_take; /* for ISR safety, basically a mutex for the mutex */
-    volatile int mutex;
+    volatile char mutex;
     int idx; /* only to keep track of the amount/idx, no real function .. */
 };
 
@@ -39,7 +39,7 @@ void * pico_mutex_init(void)
     osal_dbg("mi: %p for %p\n", mutex, __builtin_return_address(0));
     if (!mutex)
         return NULL;
-    mutex->mutex = 1;
+    mutex->mutex = 0;
     mutex->idx = mtx_number++;
     return mutex;
 }
@@ -57,7 +57,7 @@ int pico_mutex_lock_timeout(void * mutex, int timeout)
 	{
         struct osal_mutex * mtx = mutex;
         pico_time timestamp = PICO_TIME_MS();
-        while (mtx->mutex == 0)
+        while (mtx->mutex != 0)
         {
             pico_stack_tick();
             #ifdef _POSIX_VERSION
@@ -68,9 +68,9 @@ int pico_mutex_lock_timeout(void * mutex, int timeout)
             if ((timeout != -1) && (PICO_TIME_MS() > (timestamp + timeout)))
                 break;
         }
-        if (mtx->mutex == 1)
+        if (__atomic_test_and_set(&mtx->mutex, __ATOMIC_SEQ_CST) == 0)
         {
-            mtx->mutex = 0; /* take the mutex */
+            // mtx->mutex = 0; /* take the mutex */
         }
         else
         {
@@ -90,7 +90,8 @@ void pico_mutex_unlock(void * mutex)
 	if(mutex != NULL)
     {
         struct osal_mutex * mtx = mutex;
-        mtx->mutex = 1;
+        // mtx->mutex = 0;
+        __atomic_clear (&mtx->mutex, __ATOMIC_SEQ_CST);
     }
 }
 
@@ -100,7 +101,8 @@ void pico_mutex_unlock_ISR(void * mutex)
     {
         struct osal_mutex * mtx = mutex;
         // tricky stuff needed or not?
-        mtx->mutex = 1;
+        // mtx->mutex = 0;
+        __atomic_clear (&mtx->mutex, __ATOMIC_SEQ_CST);
     }
 }
 

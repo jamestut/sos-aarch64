@@ -33,7 +33,7 @@ static inline int sync_atomic_increment_safe(volatile int *x, int *oldval, int s
             /* We would overflow */
             return -1;
         }
-    } while (!__atomic_compare_exchange_n(x, oldval, *oldval + 1, 1, success_memorder, __ATOMIC_RELAXED));
+    } while (!__atomic_compare_exchange_n(x, oldval, *oldval + 1, 1, success_memorder, __ATOMIC_SEQ_CST));
     return 0;
 }
 
@@ -54,7 +54,7 @@ static inline int sync_atomic_decrement_safe(volatile int *x, int *oldval, int s
             /* We would overflow */
             return -1;
         }
-    } while (!__atomic_compare_exchange_n(x, oldval, *oldval - 1, 1, success_memorder, __ATOMIC_RELAXED));
+    } while (!__atomic_compare_exchange_n(x, oldval, *oldval - 1, 1, success_memorder, __ATOMIC_SEQ_CST));
     return 0;
 }
 
