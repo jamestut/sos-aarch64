@@ -84,7 +84,7 @@
 #define IRQ_EP_BADGE         BIT(seL4_BadgeBits - 1ul)
 #define IRQ_IDENT_BADGE_BITS MASK(seL4_BadgeBits - 1ul)
 
-#define TTY_NAME             "sosh"
+#define TTY_NAME             "md5"
 #define TTY_PRIORITY         (0)
 #define TTY_EP_BADGE         (101)
 
@@ -139,7 +139,7 @@ void handle_syscall(seL4_Word badge, seL4_CPtr reply, ut_t* reply_ut)
     /* Process system call */
     switch (syscall_number) {
     case SOS_SYSCALL_OPEN:
-        handler_ret = fileman_open(badge, pt->vspace, reply, reply_ut, 
+        handler_ret = fileman_open(badge, reply, reply_ut, 
             seL4_GetMR(1), seL4_GetMR(2), false, seL4_GetMR(3));
         break;
     
@@ -148,28 +148,28 @@ void handle_syscall(seL4_Word badge, seL4_CPtr reply, ut_t* reply_ut)
         break;
     
     case SOS_SYSCALL_READ:
-        handler_ret = fileman_read(badge, pt->vspace, seL4_GetMR(1), reply, reply_ut, 
-            seL4_GetMR(2), seL4_GetMR(3), &pt->as);
+        handler_ret = fileman_read(badge, seL4_GetMR(1), reply, reply_ut, 
+            seL4_GetMR(2), seL4_GetMR(3));
         break;
 
     case SOS_SYSCALL_WRITE: 
-        handler_ret = fileman_write(badge, pt->vspace, seL4_GetMR(1), reply, reply_ut, 
-            seL4_GetMR(2), seL4_GetMR(3), &pt->as);
+        handler_ret = fileman_write(badge, seL4_GetMR(1), reply, reply_ut, 
+            seL4_GetMR(2), seL4_GetMR(3));
         break;
 
     case SOS_SYSCALL_STAT:
-        handler_ret = fileman_stat(badge, pt->vspace, reply, reply_ut, seL4_GetMR(1),
+        handler_ret = fileman_stat(badge, reply, reply_ut, seL4_GetMR(1),
             seL4_GetMR(2));
         break;
 
     case SOS_SYSCALL_OPENDIR:
-        handler_ret = fileman_open(badge, pt->vspace, reply, reply_ut, 
+        handler_ret = fileman_open(badge, reply, reply_ut, 
             seL4_GetMR(1), seL4_GetMR(2), true, 0);
         break;
 
     case SOS_SYSCALL_DIRREAD:
-        handler_ret = fileman_readdir(badge, pt->vspace, seL4_GetMR(1), reply, reply_ut,
-            seL4_GetMR(2), seL4_GetMR(3), seL4_GetMR(4), &pt->as);
+        handler_ret = fileman_readdir(badge, seL4_GetMR(1), reply, reply_ut,
+            seL4_GetMR(2), seL4_GetMR(3), seL4_GetMR(4));
         break;
 
     case SOS_SYSCALL_MMAP:
@@ -242,7 +242,7 @@ void handle_fault(seL4_Word badge, seL4_MessageInfo_t message, seL4_CPtr reply, 
                     break;
                 case seL4_Fault_VMFault:
                     // if vm_fault returns false, vm_fault will debug print the cause instead :)
-                    if(vm_fault(&message, badge, pt->vspace, &pt->as))
+                    if(vm_fault(&message, badge))
                         resume = true;
                     break;
                 default:
@@ -358,7 +358,7 @@ static uintptr_t init_process_stack(seL4_Word badge, elf_t *elf_file)
     }
 
     /* Map in the initial stack frame for the user app */
-    seL4_Error err = grp01_map_frame(badge, initial_stack, true, pt->vspace,
+    seL4_Error err = grp01_map_frame(badge, initial_stack, true,
                                PROCESS_STACK_TOP - PAGE_SIZE_4K, seL4_AllRights, 
                                seL4_ARM_Default_VMAttributes);
     if (err != 0) {
@@ -565,7 +565,7 @@ bool start_first_process(char *app_name, seL4_CPtr ep)
     }
 
     /* Map in the IPC buffer for the thread */
-    err = grp01_map_frame(TTY_EP_BADGE, pt->ipc_buffer_frame, true, pt->vspace, PROCESS_IPC_BUFFER,
+    err = grp01_map_frame(TTY_EP_BADGE, pt->ipc_buffer_frame, true, PROCESS_IPC_BUFFER,
                     seL4_AllRights, seL4_ARM_Default_VMAttributes);
     if (err != 0) {
         ZF_LOGE("Unable to map IPC buffer for user app");
@@ -573,7 +573,7 @@ bool start_first_process(char *app_name, seL4_CPtr ep)
     }
 
     // extra page for large data that has to be passed thru IPC
-    err = grp01_map_frame(TTY_EP_BADGE, pt->ipc_buffer2_frame, true, pt->vspace, PROCESS_IPC_BUFFER + PAGE_SIZE_4K,
+    err = grp01_map_frame(TTY_EP_BADGE, pt->ipc_buffer2_frame, true, PROCESS_IPC_BUFFER + PAGE_SIZE_4K,
                     seL4_AllRights, seL4_ARM_Default_VMAttributes);
     if (err != 0) {
         ZF_LOGE("Unable to map larger IPC buffer for user app");
@@ -693,6 +693,10 @@ NORETURN void *main_continued(UNUSED void *arg)
     grp01_map_bookkeep_init();
     memset(proctable, 0, sizeof(proctable));
     ZF_LOGF_IF(!grp01_map_init(0, seL4_CapInitThreadVSpace), "Cannot init bookkepping for SOS frame map");
+
+    // fill in SOS' own process data!
+    proctable[0].active = true;
+    proctable[0].vspace = seL4_CapInitThreadVSpace;
 
     /* run sos initialisation tests */
     run_tests(&cspace);

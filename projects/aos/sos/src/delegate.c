@@ -68,27 +68,24 @@ void delegate_do_nothing(seL4_CPtr ep)
     seL4_Call(ep, msg);
 }
 
-void* delegate_userptr_read(seL4_CPtr ep, userptr_t src, size_t len, seL4_Word badge, seL4_CPtr vspace)
+void* delegate_userptr_read(seL4_CPtr ep, userptr_t src, size_t len, seL4_Word badge)
 {
-    seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 5);
+    seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 4);
     seL4_SetMR(0, INT_THRDREQ_USERPTR_READ);
     seL4_SetMR(1, src);
     seL4_SetMR(2, len);
     seL4_SetMR(3, badge);
-    seL4_SetMR(4, vspace);
     seL4_Call(ep, msg);
     return seL4_GetMR(0);
 }
 
-userptr_write_state_t delegate_userptr_write_start(seL4_CPtr ep, userptr_t src, size_t len, dynarray_t* userasarr, seL4_Word badge, seL4_CPtr vspace)
+userptr_write_state_t delegate_userptr_write_start(seL4_CPtr ep, userptr_t src, size_t len, seL4_Word badge)
 {
-    seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 6);
+    seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 4);
     seL4_SetMR(0, INT_THRDREQ_USERPTR_WRITE_START);
     seL4_SetMR(1, src);
     seL4_SetMR(2, len);
-    seL4_SetMR(3, userasarr);
-    seL4_SetMR(4, badge);
-    seL4_SetMR(5, vspace);
+    seL4_SetMR(3, badge);
     seL4_Call(ep, msg);
     
     userptr_write_state_t ret;
@@ -236,12 +233,12 @@ void handle_delegate_req(seL4_Word badge, seL4_Word msglen, seL4_CPtr reply, ut_
             break;
 
         case INT_THRDREQ_USERPTR_READ:
-            PARAM_COUNT_CHECK(msglen, 5);
+            PARAM_COUNT_CHECK(msglen, 4);
             hdl_userptr_read(reply);
             break;
 
         case INT_THRDREQ_USERPTR_WRITE_START:
-            PARAM_COUNT_CHECK(msglen, 6);
+            PARAM_COUNT_CHECK(msglen, 4);
             hdl_userptr_write_start(reply);
             break;
 
@@ -324,15 +321,14 @@ void hdl_do_nothing(seL4_CPtr reply)
 void hdl_userptr_read(seL4_CPtr reply)
 {
     seL4_MessageInfo_t reply_msg = seL4_MessageInfo_new(0, 0, 0, 1);
-    uintptr_t ret = (uintptr_t)userptr_read(seL4_GetMR(1), seL4_GetMR(2), seL4_GetMR(3), seL4_GetMR(4));
+    uintptr_t ret = (uintptr_t)userptr_read(seL4_GetMR(1), seL4_GetMR(2), seL4_GetMR(3));
     seL4_SetMR(0, ret);
     seL4_Send(reply, reply_msg);
 }
 
 void hdl_userptr_write_start(seL4_CPtr reply)
 {
-    userptr_write_state_t ret = 
-        userptr_write_start(seL4_GetMR(1), seL4_GetMR(2), seL4_GetMR(3), seL4_GetMR(4), seL4_GetMR(5));
+    userptr_write_state_t ret = userptr_write_start(seL4_GetMR(1), seL4_GetMR(2), seL4_GetMR(3));
     seL4_MessageInfo_t reply_msg = seL4_MessageInfo_new(0, 0, 0, DIV_ROUND_UP(sizeof(ret), sizeof(seL4_Word)));
     memcpy(seL4_GetIPCBuffer()->msg, &ret, sizeof(ret));
     seL4_Send(reply, reply_msg);

@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <sys/mman.h>
 
-#define FILENAME "random.dat"
+#define FILENAME "Sunset.heic"
 #define BUFFSZ 100000
 
 void doit()
@@ -20,7 +20,9 @@ void doit()
         puts("MD5 start error");
         return;
     }
-    
+
+    printf("Start time = %lld ms\n", sos_sys_time_stamp() / 1000);
+
     int fh = open(FILENAME, O_RDONLY);
     printf("Got FH = %d\n", fh);
     size_t acc = 0;
@@ -55,6 +57,8 @@ void doit()
     for(int i=0; i<sizeof(output); ++i)
         printf("%02x", output[i]);
     putchar('\n');
+
+    printf("Finish time = %lld ms\n", sos_sys_time_stamp() / 1000);
 
     close(fh);
 }

@@ -9,6 +9,7 @@
 #include "../frame_table.h"
 #include "../utils.h"
 #include "../vmem_layout.h"
+#include "../proctable.h"
 #include <sync/mutex.h>
 #include <sys/types.h>
 #include <utils/zf_log_if.h>
@@ -108,9 +109,12 @@ bool grp01_map_init(seL4_Word badge, seL4_CPtr vspace)
     return true;
 }
 
-seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_frame_on_delete, seL4_CPtr vspace, seL4_Word vaddr, seL4_CapRights_t rights,
+seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_frame_on_delete, seL4_Word vaddr, seL4_CapRights_t rights,
                      seL4_ARM_VMAttributes attr)
 {
+    // we always assume that the badge passed here is valid!
+    seL4_CPtr vspace = proctable[badge].vspace;
+
     // simply refuse to map NULL
     if(!vaddr)
         return seL4_IllegalOperation;
@@ -295,8 +299,11 @@ seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_fram
     return err;
 }
 
-seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_CPtr vspace, seL4_Word vaddrbegin, seL4_Word vaddrend, bool full)
+seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_Word vaddrbegin, seL4_Word vaddrend, bool full)
 {
+    // we always assume that the badge passed here is valid!
+    seL4_CPtr vspace = proctable[badge].vspace;    
+
     // if full is turned on, we will completely obliviate all the intermediary pages from bottom to top!
     if(full) {
         vaddrbegin = 0;
@@ -459,11 +466,11 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_CPtr vspace, seL4_Word vaddrb
     return seL4_NoError;
 }
 
-frame_ref_t grp01_get_frame(seL4_Word badge, seL4_CPtr vspace, seL4_Word vaddr)
+frame_ref_t grp01_get_frame(seL4_Word badge, seL4_Word vaddr)
 {
-    // the usual checking
-    if(badge >= MAX_PID || !vspace)
-        return 0;
+    // we always assume that the badge passed here is valid!
+    seL4_CPtr vspace = proctable[badge].vspace;
+    
     struct bookkeeping* lbk = bk + badge;
     if(lbk->vspace != vspace)
         return 0;
@@ -478,10 +485,13 @@ frame_ref_t grp01_get_frame(seL4_Word badge, seL4_CPtr vspace, seL4_Word vaddr)
     return ((frame_ref_t*)frame_data(ppd->dir))[PD_INDEX(vaddr, PT_PT)] & FR_FLAG_REF_AREA;
 }
 
-void* userptr_read(userptr_t src, size_t len, seL4_Word badge, seL4_CPtr vspace)
+void* userptr_read(userptr_t src, size_t len, seL4_Word badge)
 {
+    // we always assume that the badge passed here is valid!
+    seL4_CPtr vspace = proctable[badge].vspace;
+
     // the usual checking
-    if(badge >= MAX_PID || !vspace || !len)
+    if(!len)
         return 0;
     struct bookkeeping* userbk = bk + badge;
     if(userbk->vspace != vspace)
@@ -558,7 +568,7 @@ void* userptr_read(userptr_t src, size_t len, seL4_Word badge, seL4_CPtr vspace)
                                     allpagesmapped = false;
                                     break;
                                 }
-                                if(grp01_map_frame(0, fr, false, bk->vspace, scratchvaddr, 
+                                if(grp01_map_frame(0, fr, false, scratchvaddr, 
                                     curras.perm, seL4_ARM_Default_VMAttributes) != seL4_NoError)
                                         allpagesmapped = false;
                                 scratchvaddr += PAGE_SIZE_4K;
@@ -600,7 +610,7 @@ void* userptr_read(userptr_t src, size_t len, seL4_Word badge, seL4_CPtr vspace)
     if(!allpagesmapped) {
         ZF_LOGI("User app requested read on unmapped frames.");
         // unmap from our AS
-        ZF_LOGF_IF(grp01_unmap_frame(0, bk->vspace, curras.begin, curras.end, false) != seL4_NoError, 
+        ZF_LOGF_IF(grp01_unmap_frame(0, curras.begin, curras.end, false) != seL4_NoError, 
             "Error unmapping scratch frame");
         // and remove the AS
         sync_mutex_lock(&scratch_lock);
@@ -617,7 +627,7 @@ void* userptr_read(userptr_t src, size_t len, seL4_Word badge, seL4_CPtr vspace)
     return (void*)ret;
 }
 
-userptr_write_state_t userptr_write_start(userptr_t src, size_t len, dynarray_t* userasarr, seL4_Word badge, seL4_CPtr vspace)
+userptr_write_state_t userptr_write_start(userptr_t src, size_t len, seL4_Word badge)
 {
     userptr_write_state_t ret = {0};
     addrspace_t scratch = {0};
@@ -627,9 +637,11 @@ userptr_write_state_t userptr_write_start(userptr_t src, size_t len, dynarray_t*
     if(!len)
         return ret;
 
+    // we always assume that the badge passed here is valid!
+    seL4_CPtr vspace = proctable[badge].vspace;
+    dynarray_t* userasarr = &proctable[badge].as;
+
     // the usual checking
-    if(badge >= MAX_PID || !vspace)
-        return ret;
     struct bookkeeping* userbk = bk + badge;
     if(userbk->vspace != vspace)
         return ret;
@@ -717,7 +729,7 @@ bool userptr_write_next(userptr_write_state_t* it)
     if(it->curr) {
         // unmap SOS scratch frame
         it->curr = ROUND_DOWN(it->curr, PAGE_SIZE_4K);
-        if(grp01_unmap_frame(0, bk->vspace, it->curr, it->curr + PAGE_SIZE_4K, false) != seL4_NoError) {
+        if(grp01_unmap_frame(0, it->curr, it->curr + PAGE_SIZE_4K, false) != seL4_NoError) {
             ZF_LOGE("Error unmapping scratch frame.");
             return false;
         }
@@ -752,7 +764,7 @@ void userptr_unmap(void* sosaddr)
     int idx = addrspace_find(&scratchas, (uintptr_t)sosaddr);
     if(idx >= 0) {
         addrspace_t* as = (addrspace_t*)scratchas.data + idx;
-        ZF_LOGF_IF(grp01_unmap_frame(0, bk->vspace, as->begin, as->end, false),
+        ZF_LOGF_IF(grp01_unmap_frame(0, as->begin, as->end, false),
             "Error unmapping scratch frame");
         addrspace_remove(&scratchas, idx);
     }
@@ -783,7 +795,7 @@ bool userptr_single_map(uintptr_t local, pd_indices_t useridx,
             ZF_LOGE("Cannot allocate frame for user.");
             return false;
         }
-        if(grp01_map_frame(pid, fr, true, bk[pid].vspace, PD_INDEX_VADDR(useridx), 
+        if(grp01_map_frame(pid, fr, true, PD_INDEX_VADDR(useridx), 
             userright, seL4_ARM_Default_VMAttributes) != seL4_NoError)
         {
             ZF_LOGE("Cannot map user's frame.");
@@ -792,7 +804,7 @@ bool userptr_single_map(uintptr_t local, pd_indices_t useridx,
     } 
     
     // map the frame to the designated scratch address
-    if(grp01_map_frame(0, fr, false, bk->vspace, local, seL4_AllRights, 
+    if(grp01_map_frame(0, fr, false, local, seL4_AllRights, 
         seL4_ARM_Default_VMAttributes) != seL4_NoError)
     {
         ZF_LOGE("Cannot map frame to SOS scratch");

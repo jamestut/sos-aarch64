@@ -61,7 +61,7 @@ void fileman_destroy(seL4_Word pid);
 // @return negative errno if failed, 0 if pending.
 //         Result will be replied directly to the client once finishes,
 //         using negative errno semantic.
-int fileman_open(seL4_Word pid, seL4_CPtr vspace, seL4_CPtr reply, ut_t* reply_ut, userptr_t filename, size_t filename_len, bool dir, int mode);
+int fileman_open(seL4_Word pid, seL4_CPtr reply, ut_t* reply_ut, userptr_t filename, size_t filename_len, bool dir, int mode);
 
 // @param fh valid file handle for the given pid returned by fileman_open
 // @return 1 for immediate return, or 0 for pending operation.
@@ -71,25 +71,25 @@ int fileman_close(seL4_Word pid, seL4_CPtr reply, ut_t* reply_ut, int fh);
 // @return negative errno if failed, 0 if pending.
 //         Result will be replied directly to the client once finishes,
 //         using negative errno semantic.
-int fileman_write(seL4_Word pid, seL4_CPtr vspace, int fh, seL4_CPtr reply, ut_t* reply_ut, userptr_t buff, uint32_t len, dynarray_t* userasarr);
+int fileman_write(seL4_Word pid, int fh, seL4_CPtr reply, ut_t* reply_ut, userptr_t buff, uint32_t len);
 
 // read to buffer from the underlying file system
 // @return negative errno if failed, 0 if pending.
 //         Result will be replied directly to the client once finishes,
 //         using negative errno semantic.
-int fileman_read(seL4_Word pid, seL4_CPtr vspace, int fh, seL4_CPtr reply, ut_t* reply_ut, userptr_t buff, uint32_t len, dynarray_t* userasarr);
+int fileman_read(seL4_Word pid, int fh, seL4_CPtr reply, ut_t* reply_ut, userptr_t buff, uint32_t len);
 
 // get some information about the given file name.
 // @return negative errno if failed, 0 if pending.
 //         Result will be replied directly to the client once finishes,
 //         using negative errno semantic.
-int fileman_stat(seL4_Word pid, seL4_CPtr vspace, seL4_CPtr reply, ut_t* reply_ut, userptr_t filename, size_t filename_len);
+int fileman_stat(seL4_Word pid, seL4_CPtr reply, ut_t* reply_ut, userptr_t filename, size_t filename_len);
 
 // get the directory entry from an open directory at a given position.
 // @return negative errno if failed, 0 if pending.
 //         Result will be replied directly to the client once finishes,
 //         using negative errno semantic.
-int fileman_readdir(seL4_Word pid, seL4_CPtr vspace, int fh, seL4_CPtr reply, ut_t* reply_ut, size_t pos, userptr_t buff, size_t bufflen, dynarray_t* userasarr);
+int fileman_readdir(seL4_Word pid, int fh, seL4_CPtr reply, ut_t* reply_ut, size_t pos, userptr_t buff, size_t bufflen);
 
 // close a directory handle.
 // @return negative errno if failed, 0 if pending.

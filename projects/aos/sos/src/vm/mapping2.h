@@ -44,7 +44,7 @@ void grp01_map_destroy(seL4_Word badge);
 
 // map a frame given by the frame capability to the given vspace, on SOS' behalf (SOS' cspace).
 // @return 0 on success
-seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_frame_on_delete, seL4_CPtr vspace, seL4_Word vaddr, seL4_CapRights_t rights,
+seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_frame_on_delete, seL4_Word vaddr, seL4_CapRights_t rights,
                      seL4_ARM_VMAttributes attr);
 
 // unmap a virtual address range from vspace.
@@ -52,16 +52,16 @@ seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_fram
 // @param vaddrend   page-aligned end of the frame to unmap, exclusive
 // @param full       if true, all touched intermediary pages and shadow tables associated with the vspace
 //                   will be torn off.
-seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_CPtr vspace, seL4_Word vaddrbegin, seL4_Word vaddrend, bool full);
+seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_Word vaddrbegin, seL4_Word vaddrend, bool full);
 
 // @return 0 on lookup failure (e.g. wrong region / unmapped frame)
-frame_ref_t grp01_get_frame(seL4_Word badge, seL4_CPtr vspace, seL4_Word vaddr);
+frame_ref_t grp01_get_frame(seL4_Word badge, seL4_Word vaddr);
 
 // "copy-in" from user's vspace
 // @return 0 on failure, or pointer to the beginning of the buffer on success
-void* userptr_read(userptr_t src, size_t len, seL4_Word badge, seL4_CPtr vspace);
+void* userptr_read(userptr_t src, size_t len, seL4_Word badge);
 
-userptr_write_state_t userptr_write_start(userptr_t src, size_t len, dynarray_t* useras, seL4_Word badge, seL4_CPtr vspace);
+userptr_write_state_t userptr_write_start(userptr_t src, size_t len, seL4_Word badge);
 
 // @return false if error occured (e.g. cannot map frame)
 //         otherwise, return true, even if no action is carried
