@@ -67,6 +67,8 @@
 // GRP01: M4
 #include "delegate.h"
 #include "fs/nfs.h"
+// GRP01: rearch
+#include "proctable.h"
 
 #include <aos/vsyscall.h>
 
@@ -109,29 +111,6 @@ sync_mutex_t scratch_lock;
 
 static seL4_CPtr sched_ctrl_start;
 static seL4_CPtr sched_ctrl_end;
-
-/* process table */
-typedef struct {
-    bool active;
-
-    ut_t *tcb_ut;
-    seL4_CPtr tcb;
-    ut_t *vspace_ut;
-    seL4_CPtr vspace;
-
-    frame_ref_t ipc_buffer_frame;
-
-    frame_ref_t ipc_buffer2_frame;
-    
-    ut_t *sched_context_ut;
-    seL4_CPtr sched_context;
-
-    cspace_t cspace;
-
-    dynarray_t as;
-} proctable_t;
-
-proctable_t proctable[MAX_PID];
 
 void handle_syscall(seL4_Word badge, seL4_CPtr reply, ut_t* reply_ut)
 {

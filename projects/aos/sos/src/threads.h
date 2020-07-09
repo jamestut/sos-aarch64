@@ -42,7 +42,7 @@ typedef void thread_main_f(void *);
 extern __thread sos_thread_t *current_thread;
 
 void init_threads(seL4_CPtr ep, seL4_CPtr sched_ctrl_start_, seL4_CPtr sched_ctrl_end_);
-sos_thread_t *spawn(thread_main_f function, void *arg, const char* name, seL4_Word badge);
-sos_thread_t *thread_create(thread_main_f function, void *arg, const char* name, seL4_Word badge, bool resume);
+sos_thread_t *spawn(thread_main_f function, void *arg, const char* name, seL4_Word badge, seL4_CPtr ep, seL4_Word prio);
+sos_thread_t *thread_create(thread_main_f function, void *arg, const char* name, seL4_Word badge, bool resume, seL4_CPtr ep, seL4_Word prio);
 int thread_suspend(sos_thread_t *thread);
 int thread_resume(sos_thread_t *thread);

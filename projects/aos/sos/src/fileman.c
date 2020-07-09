@@ -430,7 +430,7 @@ finish:
         param->vspace, param->filename_term);
     sync_mutex_unlock(&pft->felock);
     send_and_free_reply_cap(delegate_ep, ret, param->reply, param->reply_ut);
-    delegate_free(delegate_ep, param);
+    free(param);
 }
 
 void bg_fileman_rw(seL4_CPtr delegate_ep, void* data)
@@ -478,7 +478,7 @@ void bg_fileman_rw(seL4_CPtr delegate_ep, void* data)
 finish:
     sync_mutex_unlock(&pft->felock);
     send_and_free_reply_cap(delegate_ep, ret, param->reply, param->reply_ut);
-    delegate_free(delegate_ep, param);
+    free(param);
 }
 
 void bg_fileman_close(seL4_CPtr delegate_ep, void* data)
@@ -500,7 +500,7 @@ void bg_fileman_close(seL4_CPtr delegate_ep, void* data)
     //finish:
     sync_mutex_unlock(&pft->felock);
     send_and_free_reply_cap(delegate_ep, 1, param->reply, param->reply_ut);
-    delegate_free(delegate_ep, param);
+    free(param);
 }
 
 void bg_fileman_stat(seL4_CPtr delegate_ep, void* data)
@@ -521,7 +521,7 @@ finish:
     else
         send_and_free_reply_cap_ex(delegate_ep, 1, sizeof(target)/sizeof(seL4_Word), target.matcher,
             param->reply, param->reply_ut);
-    delegate_free(delegate_ep, param);
+    free(param);
 }
 
 void bg_fileman_readdir(seL4_CPtr delegate_ep, void* data)
@@ -579,7 +579,7 @@ void bg_fileman_readdir(seL4_CPtr delegate_ep, void* data)
 finish:
     sync_mutex_unlock(&pft->felock);
     send_and_free_reply_cap(delegate_ep, ret, param->reply, param->reply_ut);
-    delegate_free(delegate_ep, param);
+    free(param);
 }
 
 ssize_t fileman_write_broker(seL4_CPtr delegate_ep, struct filehandler* fh, ssize_t id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len, off_t offset)
