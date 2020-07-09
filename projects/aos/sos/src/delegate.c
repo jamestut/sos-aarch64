@@ -7,8 +7,6 @@
 typedef enum {
     // generic
     INT_THRDREQ_NONE = 0,
-    INT_THRDREQ_MALLOC,
-    INT_THRDREQ_FREE,
     INT_THRDREQ_USERPTR_READ,
     INT_THRDREQ_USERPTR_WRITE_START,
     INT_THRDREQ_USERPTR_WRITE_NEXT,
@@ -32,10 +30,6 @@ typedef enum {
 
 /* ---- declaration for reply functions ---- */
 void hdl_do_nothing(seL4_CPtr reply);
-
-void hdl_malloc(seL4_CPtr reply);
-
-void hdl_free(seL4_CPtr reply);
 
 void hdl_userptr_read(seL4_CPtr reply);
 
@@ -71,23 +65,6 @@ void delegate_do_nothing(seL4_CPtr ep)
 {
     seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 1);
     seL4_SetMR(0, INT_THRDREQ_NONE);
-    seL4_Call(ep, msg);
-}
-
-void* delegate_malloc(seL4_CPtr ep, size_t sz)
-{
-    seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 2);   
-    seL4_SetMR(0, INT_THRDREQ_MALLOC);
-    seL4_SetMR(1, sz);
-    seL4_Call(ep, msg);
-    return seL4_GetMR(0);
-}
-
-void delegate_free(seL4_CPtr ep, void* ptr)
-{
-    seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 2);
-    seL4_SetMR(0, INT_THRDREQ_FREE);
-    seL4_SetMR(1, ptr);
     seL4_Call(ep, msg);
 }
 
@@ -257,16 +234,6 @@ void handle_delegate_req(seL4_Word badge, seL4_Word msglen, seL4_CPtr reply, ut_
             PARAM_COUNT_CHECK(msglen, 1);
             hdl_do_nothing(reply);
             break;
-        
-        case INT_THRDREQ_MALLOC:
-            PARAM_COUNT_CHECK(msglen, 2);
-            hdl_malloc(reply);
-            break;
-
-        case INT_THRDREQ_FREE:
-            PARAM_COUNT_CHECK(msglen, 2);
-            hdl_malloc(reply);
-            break;
 
         case INT_THRDREQ_USERPTR_READ:
             PARAM_COUNT_CHECK(msglen, 5);
@@ -352,20 +319,6 @@ void hdl_do_nothing(seL4_CPtr reply)
 {
     seL4_MessageInfo_t reply_msg = seL4_MessageInfo_new(0, 0, 0, 0);
     seL4_Send(reply, reply_msg);
-}
-
-void hdl_malloc(seL4_CPtr reply) 
-{
-    seL4_MessageInfo_t reply_msg = seL4_MessageInfo_new(0, 0, 0, 1);
-    uintptr_t ret = (uintptr_t)malloc(seL4_GetMR(1));
-    seL4_SetMR(0, ret);
-    seL4_Send(reply, reply_msg);
-}
-
-void hdl_free(seL4_CPtr reply) 
-{
-    free((void*)seL4_GetMR(1));
-    hdl_do_nothing(reply); // :)
 }
 
 void hdl_userptr_read(seL4_CPtr reply)

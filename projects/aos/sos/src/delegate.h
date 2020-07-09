@@ -18,10 +18,6 @@ void handle_delegate_req(seL4_Word badge, seL4_Word msglen, seL4_CPtr reply, ut_
 // ---- non main threads should call these functions (those that begins w/ delegate_) ----
 void delegate_do_nothing(seL4_CPtr ep);
 
-void* delegate_malloc(seL4_CPtr ep, size_t sz);
-
-void delegate_free(seL4_CPtr ep, void* ptr);
-
 void* delegate_userptr_read(seL4_CPtr ep, userptr_t src, size_t len, seL4_Word badge, seL4_CPtr vspace);
 
 userptr_write_state_t delegate_userptr_write_start(seL4_CPtr ep, userptr_t src, size_t len, dynarray_t* userasarr, seL4_Word badge, seL4_CPtr vspace);
