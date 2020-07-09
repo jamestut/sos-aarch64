@@ -81,7 +81,8 @@ void bgworker_init()
 
     // spawn all workers
     for(int i=0; i<BG_HANDLERS; ++i) {
-        workers[i] = spawn(bgworker_loop, workers + i, "bgworker_thread", BACKEND_HANDLER_BADGE);
+        // TODO: GRP01: change thread prio
+        workers[i] = spawn(bgworker_loop, workers + i, "bgworker_thread", BACKEND_HANDLER_BADGE, 0, 0);
         if(!workers[i]) {
             ZF_LOGF("Cannot create backend handler thread (thread %d of %d).", 
                 i+1, BG_HANDLERS);
