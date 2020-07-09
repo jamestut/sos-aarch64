@@ -11,40 +11,21 @@
 
 #include "bgworker.h"
 
-#define MAX_QUEUE 16
-
-struct be_item {
-    bgworker_callback_fn fn;
-    void* data;
-};
-
-/* local variables */
-
 bool initialized = false;
 
-// circular queue
-struct {
-    // empty = prod == cons
-    // full  = prod == cons - 1
-    uint16_t prod_pos;
-    uint16_t cons_pos;
-    struct be_item data[MAX_QUEUE];
-    sync_bin_sem_t lock;
-    sync_cv_t cv;
-} cqueue;
+// lock free: all processes are single threaded.
+typedef struct {
+    sos_thread_t* workerthread;
+    // used to wake up the corresponding thread!
+    seL4_CPtr ntfn;
+    bgworker_callback_fn fn;
+    void* data;
+} bgdata_t;
 
-sos_thread_t* workers[BG_HANDLERS];
-// indicate to workers if main has finished spawning everything
-struct {
-    bool initfinish;
-    sync_bin_sem_t lock;
-    sync_cv_t cv;
-} workerssynch;
+bgdata_t bgdata[MAX_PID];
 
 /* local functions declarations */
 void bgworker_loop(void*);
-
-inline uint16_t inc_pos(uint16_t v);
 
 /* function implementations */
 void bgworker_init()
@@ -54,103 +35,69 @@ void bgworker_init()
     initialized = true;
 
     // empty the data structure before we begin!
-    memset(&cqueue, 0, sizeof(cqueue));
-    memset(&workerssynch, 0, sizeof(workerssynch));
-    memset(workers, 0, sizeof(workers));
-
-    // init the notifications for the sync objects
-    // we'd like to keep the resulting ntfn for the SOS' lifetime,
-    // so we'll discard the ref to the resulting the ut_t and also the ntfn itself.
-    // also, creating the libsel4sync objects will never fail if the ntfn caps are correct!
-    seL4_CPtr ntfn;
-    if(!alloc_retype(&ntfn, seL4_NotificationObject, seL4_NotificationBits)) 
-        ZF_LOGF("Cannot create notification object for lock.");
-    sync_bin_sem_init(&cqueue.lock, ntfn, 1);
-    if(!alloc_retype(&ntfn, seL4_NotificationObject, seL4_NotificationBits))
-        ZF_LOGF("Cannot create notification object for CV.");
-    sync_cv_init(&cqueue.cv, ntfn);
-
-    // now create the synch objects for worker's indication that they all got the slot
-    if(!alloc_retype(&ntfn, seL4_NotificationObject, seL4_NotificationBits)) 
-        ZF_LOGF("Cannot create notification object for workerssynch' lock.");
-    sync_bin_sem_init(&workerssynch.lock, ntfn, 1);
-    if(!alloc_retype(&ntfn, seL4_NotificationObject, seL4_NotificationBits)) 
-        ZF_LOGF("Cannot create notification object for workerssynch' CV.");
-    sync_cv_init(&workerssynch.cv, ntfn);
-    workerssynch.initfinish = false;
-
-    // spawn all workers
-    for(int i=0; i<BG_HANDLERS; ++i) {
-        // TODO: GRP01: change thread prio
-        workers[i] = spawn(bgworker_loop, workers + i, "bgworker_thread", BACKEND_HANDLER_BADGE, 0, 0);
-        if(!workers[i]) {
-            ZF_LOGF("Cannot create backend handler thread (thread %d of %d).", 
-                i+1, BG_HANDLERS);
-        }
-    }
-
-    // tell the workers that they may proceed!
-    sync_bin_sem_wait(&workerssynch.lock);
-    workerssynch.initfinish = true;
-    sync_cv_broadcast_release(&workerssynch.lock, &workerssynch.cv);
+    memset(bgdata, 0, sizeof(bgdata));
 }
 
-bool bgworker_enqueue_callback(bgworker_callback_fn fn, void* args)
+void bgworker_create(seL4_Word pid)
+{
+    ZF_LOGF_IF(pid >= MAX_PID, "Wrong PID");
+
+    bgdata_t * bd = bgdata + pid;
+
+    if(!bd->ntfn)
+        ZF_LOGF_IF(!alloc_retype(&bd->ntfn, seL4_NotificationObject, seL4_NotificationBits),
+            "Error creating notification object for background worker");
+
+    // set notification to 0, so that we can wait for child to finish
+    seL4_Poll(bd->ntfn, NULL);
+    
+    ZF_LOGF_IF(bd->workerthread, "Background worker for PID %d already exists", pid);
+    bd->workerthread = spawn(bgworker_loop, bd, "bgworker", BACKEND_HANDLER_BADGE, 0, 0);
+}
+
+void bgworker_destroy(seL4_Word pid)
+{
+    ZF_LOGF("Not implemented!");
+}
+
+bool bgworker_enqueue_callback(seL4_Word pid, bgworker_callback_fn fn, void* args)
 {
     // if we do this, then we have a bug!
     ZF_LOGF_IF(!initialized, "Backend not initialized!");
 
-    bool ret;
+    bgdata_t* bd = bgdata + pid;
+    ZF_LOGF_IF(!fn, "NULL function passed to background worker");
 
-    sync_bin_sem_wait(&cqueue.lock);
-    // we're the producer!
-    // only enqueue if we're not full, obviously
-    if(inc_pos(cqueue.prod_pos) != cqueue.cons_pos) {
-        ret = true;
-        // enqueue
-        cqueue.data[cqueue.prod_pos].fn = fn;
-        cqueue.data[cqueue.prod_pos].data = args;
-        cqueue.prod_pos = inc_pos(cqueue.prod_pos);
-        // wake up waiter if needed
-        sync_cv_signal(&cqueue.cv);
-    } else {
-        ret = false;
-    }
-    sync_bin_sem_post(&cqueue.lock);
+    bd->fn = fn;
+    bd->data = args;
+    
+    seL4_Signal(bd->ntfn);
 
-    return ret;
+    return true;
 }
 
-void bgworker_loop(void* thrd_handle_p)
+void bgworker_loop(void* data)
 {
-    // wait until we're allowed to proceed, as the thread handle struct may not 
-    // be initialized properly yet if we proceed now
-    sync_bin_sem_wait(&workerssynch.lock);
-    while(!workerssynch.initfinish)
-        sync_cv_wait(&workerssynch.lock, &workerssynch.cv);
-    sync_bin_sem_post(&workerssynch.lock);
+    bgdata_t* bd = data;
 
-    sos_thread_t* thrdhdl = *((sos_thread_t**)thrd_handle_p);
+    for(;;) {
+        // wait until we asked to wake up
+        seL4_Wait(bd->ntfn, NULL);
+        // if we got an empty function, bail!
+        if(!bd->fn)
+            break;
 
-    // no shutdown condition here. we wait 4ever!
-    while(1) {
-        sync_bin_sem_wait(&cqueue.lock);
-        // check if empty
-        while(cqueue.prod_pos == cqueue.cons_pos) {
-            sync_cv_wait(&cqueue.lock, &cqueue.cv);
-        }
-        // we have work to do!
-        // dequeue first
-        struct be_item data = cqueue.data[cqueue.cons_pos];
-        cqueue.cons_pos = inc_pos(cqueue.cons_pos);
-        
-        // unlock and we shall do the time consuming operation!
-        sync_bin_sem_post(&cqueue.lock);
-        data.fn(thrdhdl->user_ep, data.data);
+        // otherwise, call it!
+        // note that at the end of the called function, it is very likely
+        // that the function will reply back to user, thus resuming user's execution.
+        // by then, user can then call syscall that requires background worker again, 
+        // even before we finished. However, it still doesn't matter as we only have one
+        // thread to worry about, and the moment we execute this bd->fn, we don't need
+        // the value of bd->fn anymore.
+        bd->fn(bd->workerthread->user_ep, bd->data);
     }
-}
 
-uint16_t inc_pos(uint16_t v)
-{
-    return (v + 1) % MAX_QUEUE;
+    // signal the parent that we've finished doing our business.
+    // parent may now destroy the thread associated with this worker.
+    seL4_Signal(bd->ntfn);
 }

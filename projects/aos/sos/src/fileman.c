@@ -245,7 +245,7 @@ int fileman_open(seL4_Word pid, seL4_CPtr reply, ut_t* reply_ut, userptr_t filen
     param->reply = reply;
     param->reply_ut = reply_ut;
 
-    bgworker_enqueue_callback(bg_fileman_open, param);
+    bgworker_enqueue_callback(pid, bg_fileman_open, param);
     return 0;
 }
 
@@ -266,7 +266,7 @@ int fileman_close(seL4_Word pid, seL4_CPtr reply, ut_t* reply_ut, int fh)
     param->reply = reply;
     param->reply_ut = reply_ut;
 
-    bgworker_enqueue_callback(bg_fileman_close, param);
+    bgworker_enqueue_callback(pid, bg_fileman_close, param);
     return 0;
 }
 
@@ -303,7 +303,7 @@ int fileman_rw_dispatch(bool read, seL4_Word pid, int fh, seL4_CPtr reply, ut_t*
     param->reply = reply;
     param->reply_ut = reply_ut;
 
-    bgworker_enqueue_callback(bg_fileman_rw, param);
+    bgworker_enqueue_callback(pid, bg_fileman_rw, param);
     return 0;
 }
 
@@ -327,7 +327,7 @@ int fileman_stat(seL4_Word pid, seL4_CPtr reply, ut_t* reply_ut, userptr_t filen
     param->reply = reply;
     param->reply_ut = reply_ut;
 
-    bgworker_enqueue_callback(bg_fileman_stat, param);
+    bgworker_enqueue_callback(pid, bg_fileman_stat, param);
     return 0;
 }
 
@@ -348,7 +348,7 @@ int fileman_readdir(seL4_Word pid, int fh, seL4_CPtr reply, ut_t* reply_ut, size
     param->reply = reply;
     param->reply_ut = reply_ut;
 
-    bgworker_enqueue_callback(bg_fileman_readdir, param);
+    bgworker_enqueue_callback(pid, bg_fileman_readdir, param);
     return 0;
 }
 

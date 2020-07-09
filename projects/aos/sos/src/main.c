@@ -586,6 +586,9 @@ bool start_first_process(char *app_name, seL4_CPtr ep)
         return false;
     }
 
+    // create background worker for this app
+    bgworker_create(TTY_EP_BADGE);
+
     /* Start the new process */
     seL4_UserContext context = {
         .pc = elf_getEntryPoint(&elf_file),
@@ -690,6 +693,9 @@ NORETURN void *main_continued(UNUSED void *arg)
     // GRP01: init OS parts here
     scratchas_init();
     fileman_init();
+    init_threads(ipc_ep, sched_ctrl_start, sched_ctrl_end);
+    bgworker_init();
+    start_fake_timer();
     grp01_map_bookkeep_init();
     memset(proctable, 0, sizeof(proctable));
     ZF_LOGF_IF(!grp01_map_init(0, seL4_CapInitThreadVSpace), "Cannot init bookkepping for SOS frame map");
@@ -728,11 +734,6 @@ NORETURN void *main_continued(UNUSED void *arg)
     ZF_LOGF_IF(!success, "Failed to start first process");
 
     printf("\nSOS entering syscall loop\n");
-    init_threads(ipc_ep, sched_ctrl_start, sched_ctrl_end);
-
-    // start anything that have to run separate threads here
-    bgworker_init();
-    start_fake_timer();
 
     syscall_loop(ipc_ep);
 }
