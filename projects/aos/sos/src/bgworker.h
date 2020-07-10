@@ -2,7 +2,7 @@
 
 #include "grp01.h"
 
-typedef void (*bgworker_callback_fn)(seL4_CPtr delegate_ep, void* data);
+typedef void (*bgworker_callback_fn)(void* data);
 
 void bgworker_init();
 

@@ -8,15 +8,9 @@
 // max no. of processes supported
 #define MAX_PID             128
 
-// if this flag is true, then the IPC message must come from our
-// internal threads
-#define INT_THRD_BADGE_FLAG (0x1000)
-
-// badges for internal threads
-#define BACKEND_HANDLER_BADGE   (INT_THRD_BADGE_FLAG + 1)
-#define LIBNFS_EVTLOOP_BADGE    (INT_THRD_BADGE_FLAG + 2)
-
-// number of handlers in bgworker
-#define BG_HANDLERS         1
+// badge for main thread delegation
+#define BADGE_DELEGATE  (0x10000)
+// badge for returning reply object
+#define BADGE_REPLY_RET (0x10001)
 
 typedef uintptr_t userptr_t;

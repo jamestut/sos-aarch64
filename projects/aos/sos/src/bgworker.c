@@ -52,7 +52,7 @@ void bgworker_create(seL4_Word pid)
     seL4_Poll(bd->ntfn, NULL);
     
     ZF_LOGF_IF(bd->workerthread, "Background worker for PID %d already exists", pid);
-    bd->workerthread = spawn(bgworker_loop, bd, "bgworker", BACKEND_HANDLER_BADGE, 0, 0);
+    bd->workerthread = spawn(bgworker_loop, bd, "bgworker", 0, 0, 0);
 }
 
 void bgworker_destroy(seL4_Word pid)
@@ -94,7 +94,7 @@ void bgworker_loop(void* data)
         // even before we finished. However, it still doesn't matter as we only have one
         // thread to worry about, and the moment we execute this bd->fn, we don't need
         // the value of bd->fn anymore.
-        bd->fn(bd->workerthread->user_ep, bd->data);
+        bd->fn(bd->data);
     }
 
     // signal the parent that we've finished doing our business.

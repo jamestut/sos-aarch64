@@ -63,7 +63,7 @@
 #endif
 
 #define NETWORK_IRQ (40)
-#define WATCHDOG_TIMEOUT 1000
+#define WATCHDOG_TIMEOUT 1005
 
 #define IRQ_IDENT_BIT  BIT(31)
 #define IRQ_IDENT_MASK MASK(31)
@@ -83,6 +83,18 @@ static uint8_t ip_octet;
 struct {
     bool initialmountsuccess;
 } nfs_status = {0};
+
+typedef enum {
+    CMD_NONE = 0,
+    CMD_NFS_OPEN,
+    CMD_NFS_PREAD,
+    CMD_NFS_PWRITE,
+    CMD_NFS_CLOSE,
+    CMD_NFS_STAT,
+    CMD_NFS_OPENDIR,
+    CMD_NFS_READDIR,
+    CMD_NFS_CLOSEDIR
+} DelegateCmd;
 
 // for network thread
 struct {
@@ -199,8 +211,8 @@ static int network_tick(
 )
 {
     network_tick_internal();
-    watchdog_reset();
     seL4_IRQHandler_Ack(irq_handler);
+    watchdog_reset();
     return 0;
 }
 
@@ -406,7 +418,49 @@ static void network_thread(UNUSED void* data)
         if(badge & IRQ_IDENT_BIT) {
             network_handle_irq(badge & IRQ_IDENT_MASK);
         } else {
-            // TODO: delegate!
+            seL4_Word ret;
+            switch(seL4_GetMR(0)) {
+                case CMD_NFS_OPEN:
+                    ret = nfs_open_async(nfs, seL4_GetMR(1), seL4_GetMR(2), seL4_GetMR(3),
+                        seL4_GetMR(4));
+                    break;
+                case CMD_NFS_PREAD:
+                    ret = nfs_pread_async(nfs, seL4_GetMR(1), seL4_GetMR(2), seL4_GetMR(3),
+                        seL4_GetMR(4), seL4_GetMR(5));
+                    break;
+                case CMD_NFS_PWRITE:
+                    ret = nfs_pwrite_async(nfs, seL4_GetMR(1), seL4_GetMR(2), seL4_GetMR(3),
+                        seL4_GetMR(4), seL4_GetMR(5), seL4_GetMR(6));
+                    break;
+                case CMD_NFS_STAT:
+                    ret = nfs_stat_async(nfs, seL4_GetMR(1), seL4_GetMR(2), seL4_GetMR(3));
+                    break;
+                case CMD_NFS_OPENDIR:
+                    ret = nfs_opendir_async(nfs, seL4_GetMR(1), seL4_GetMR(2), seL4_GetMR(3));
+                    break;
+                case CMD_NFS_CLOSE:
+                    ret = nfs_close_async(nfs, seL4_GetMR(1), seL4_GetMR(2), seL4_GetMR(3));
+                    break;
+                case CMD_NFS_READDIR:
+                    {
+                        nfs_seekdir(nfs, seL4_GetMR(1), seL4_GetMR(2));
+                        struct nfsdirent * ent = nfs_readdir(nfs, seL4_GetMR(1));
+                        if(!ent)
+                            ret = NULL;
+                        else 
+                            ret = ent->name;
+                    }
+                    break;
+                case CMD_NFS_CLOSEDIR:
+                    ret = 0;
+                    nfs_closedir(nfs, seL4_GetMR(1));
+                    break;
+                default:
+                    ZF_LOGF("Invalid network delegate command: %d", seL4_GetMR(0));
+            }
+            message = seL4_MessageInfo_new(0, 0, 0, 1);
+            seL4_SetMR(0, ret);
+            seL4_Send(netthrd.reply, message);
         }
     }
 }
@@ -427,46 +481,92 @@ static void network_handle_irq(seL4_Word badge)
 
 int sos_libnfs_open_async(const char *path, int flags, nfs_cb cb, void *private_data)
 {
-    return nfs_open_async(nfs, path, flags, cb, private_data);
+    seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 5);
+    seL4_SetMR(0, CMD_NFS_OPEN);
+    seL4_SetMR(1, path);
+    seL4_SetMR(2, flags);
+    seL4_SetMR(3, cb);
+    seL4_SetMR(4, private_data);
+    seL4_Call(netthrd.ep, msg);
+    return seL4_GetMR(0);
 }
 
 int sos_libnfs_pread_async(struct nfsfh *nfsfh, uint64_t offset, 
     uint64_t count, nfs_cb cb, void *private_data)
 {
-    return nfs_pread_async(nfs, nfsfh, offset, count, cb, private_data);
+    seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 6);
+    seL4_SetMR(0, CMD_NFS_PREAD);
+    seL4_SetMR(1, nfsfh);
+    seL4_SetMR(2, offset);
+    seL4_SetMR(3, count);
+    seL4_SetMR(4, cb);
+    seL4_SetMR(5, private_data);
+    seL4_Call(netthrd.ep, msg);
+    return seL4_GetMR(0);
 }
 
 int sos_libnfs_pwrite_async(struct nfsfh *nfsfh, uint64_t offset, 
     uint64_t count, const void *buf, nfs_cb cb, void *private_data)
 {
-    return nfs_pwrite_async(nfs, nfsfh, offset, count, buf, cb, private_data);
+    seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 7);
+    seL4_SetMR(0, CMD_NFS_PWRITE);
+    seL4_SetMR(1, nfsfh);
+    seL4_SetMR(2, offset);
+    seL4_SetMR(3, count);
+    seL4_SetMR(4, buf);
+    seL4_SetMR(5, cb);
+    seL4_SetMR(6, private_data);
+    seL4_Call(netthrd.ep, msg);
+    return seL4_GetMR(0);
 }
 
 int sos_libnfs_stat_async(const char *path, nfs_cb cb, void *private_data)
 {
-    return nfs_stat_async(nfs, path, cb, private_data);
+    seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 4);
+    seL4_SetMR(0, CMD_NFS_STAT);
+    seL4_SetMR(1, path);
+    seL4_SetMR(2, cb);
+    seL4_SetMR(3, private_data);
+    seL4_Call(netthrd.ep, msg);
+    return seL4_GetMR(0);
 }
 
 int sos_libnfs_opendir_async(const char *path, nfs_cb cb, void *private_data)
 {
-    return nfs_opendir_async(nfs, path, cb, private_data);
+    seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 4);
+    seL4_SetMR(0, CMD_NFS_OPENDIR);
+    seL4_SetMR(1, path);
+    seL4_SetMR(2, cb);
+    seL4_SetMR(3, private_data);
+    seL4_Call(netthrd.ep, msg);
+    return seL4_GetMR(0);
 }
 
 int sos_libnfs_close_async(struct nfsfh *nfsfh, nfs_cb cb, void *private_data)
 {
-    return nfs_close_async(nfs, nfsfh, cb, private_data);
+    seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 4);
+    seL4_SetMR(0, CMD_NFS_CLOSE);
+    seL4_SetMR(1, nfsfh);
+    seL4_SetMR(2, cb);
+    seL4_SetMR(3, private_data);
+    seL4_Call(netthrd.ep, msg);
+    return seL4_GetMR(0);
 }
 
 const char* sos_libnfs_readdir(struct nfsdir *nfsdir, size_t pos)
 {
-    nfs_seekdir(nfs, nfsdir, pos);
-    struct nfsdirent * ent = nfs_readdir(nfs, nfsdir);
-    if(!ent)
-        return NULL;
-    return ent->name;
+    seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 3);
+    seL4_SetMR(0, CMD_NFS_READDIR);
+    seL4_SetMR(1, nfsdir);
+    seL4_SetMR(2, pos);
+    seL4_Call(netthrd.ep, msg);
+    return seL4_GetMR(0);
 }
 
-void sos_libnfs_closedir(struct nfsdir *nfsfh)
+void sos_libnfs_closedir(struct nfsdir *nfsdir)
 {
-    nfs_closedir(nfs, nfsfh);
+    seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 2);
+    seL4_SetMR(0, CMD_NFS_CLOSEDIR);
+    seL4_SetMR(1, nfsdir);
+    seL4_Call(netthrd.ep, msg);
 }

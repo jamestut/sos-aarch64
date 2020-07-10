@@ -112,7 +112,7 @@ sync_mutex_t scratch_lock;
 static seL4_CPtr sched_ctrl_start;
 static seL4_CPtr sched_ctrl_end;
 
-void handle_syscall(seL4_Word badge, seL4_CPtr reply, ut_t* reply_ut)
+bool handle_syscall(seL4_Word badge, seL4_Word msglen, seL4_CPtr reply)
 {
 
     /* get the first word of the message, which in the SOS protocol is the number
@@ -139,36 +139,36 @@ void handle_syscall(seL4_Word badge, seL4_CPtr reply, ut_t* reply_ut)
     /* Process system call */
     switch (syscall_number) {
     case SOS_SYSCALL_OPEN:
-        handler_ret = fileman_open(badge, reply, reply_ut, 
+        handler_ret = fileman_open(badge, reply, 
             seL4_GetMR(1), seL4_GetMR(2), false, seL4_GetMR(3));
         break;
     
     case SOS_SYSCALL_CLOSE:
-        handler_ret = fileman_close(badge, reply, reply_ut, seL4_GetMR(1));
+        handler_ret = fileman_close(badge, reply, seL4_GetMR(1));
         break;
     
     case SOS_SYSCALL_READ:
-        handler_ret = fileman_read(badge, seL4_GetMR(1), reply, reply_ut, 
+        handler_ret = fileman_read(badge, seL4_GetMR(1), reply, 
             seL4_GetMR(2), seL4_GetMR(3));
         break;
 
     case SOS_SYSCALL_WRITE: 
-        handler_ret = fileman_write(badge, seL4_GetMR(1), reply, reply_ut, 
+        handler_ret = fileman_write(badge, seL4_GetMR(1), reply, 
             seL4_GetMR(2), seL4_GetMR(3));
         break;
 
     case SOS_SYSCALL_STAT:
-        handler_ret = fileman_stat(badge, reply, reply_ut, seL4_GetMR(1),
+        handler_ret = fileman_stat(badge, reply, seL4_GetMR(1),
             seL4_GetMR(2));
         break;
 
     case SOS_SYSCALL_OPENDIR:
-        handler_ret = fileman_open(badge, reply, reply_ut, 
+        handler_ret = fileman_open(badge, reply, 
             seL4_GetMR(1), seL4_GetMR(2), true, 0);
         break;
 
     case SOS_SYSCALL_DIRREAD:
-        handler_ret = fileman_readdir(badge, seL4_GetMR(1), reply, reply_ut,
+        handler_ret = fileman_readdir(badge, seL4_GetMR(1), reply,
             seL4_GetMR(2), seL4_GetMR(3), seL4_GetMR(4));
         break;
 
@@ -190,7 +190,7 @@ void handle_syscall(seL4_Word badge, seL4_CPtr reply, ut_t* reply_ut)
         break;
 
     case SOS_SYSCALL_USLEEP:
-        handler_ret = ts_usleep(seL4_GetMR(1), reply, reply_ut);
+        handler_ret = ts_usleep(seL4_GetMR(1), reply);
         break;
     
     case SOS_SYSCALL_TIMESTAMP:
@@ -214,15 +214,13 @@ finish:
         seL4_MessageInfo_t reply_msg = seL4_MessageInfo_new(0, 0, 0, 1);
         seL4_SetMR(0, handler_ret);
         seL4_Send(reply, reply_msg);
-        /* in MCS kernel, reply object is meant to be reused rather than freed */
-        // however, for this version, we'll delete them manually to simplify things
-        cspace_delete(&cspace, reply);
-        cspace_free_slot(&cspace, reply);
-        ut_free(reply_ut);
     }
+    // if we've replied, returns true, so that syscall_loop knows that it can reuse the 
+    // reply object
+    return handler_ret;
 }
 
-void handle_fault(seL4_Word badge, seL4_MessageInfo_t message, seL4_CPtr reply, ut_t* reply_ut)
+void handle_fault(seL4_Word badge, seL4_MessageInfo_t message, seL4_CPtr reply)
 {
     seL4_Fault_tag_t fault = seL4_MessageInfo_get_label(message);
     char msgbuff[32];
@@ -257,36 +255,46 @@ void handle_fault(seL4_Word badge, seL4_MessageInfo_t message, seL4_CPtr reply, 
         ZF_LOGE("This fault will not be handled!");
     }
 
+    // TODO: if resume is false, we should probably kill the offending process
+    // since we reuse the reply object for serving another thread, practically
+    // this thread will be suspended indefinitely (zombie?)
     if(resume) {
         seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 0);
         seL4_Send(reply, msg);
-        cspace_delete(&cspace, reply);
-        cspace_free_slot(&cspace, reply);
-        ut_free(reply_ut);
     }
 }
 
+// macros specific for syscall_loop
+#define REPLY_OBJ_COUNT ((MAX_PID)*2)
+#define REPLY_POS_INC(x) (((x) + 1) % REPLY_OBJ_COUNT)
+#define REPLY_OBJ_FULL (REPLY_POS_INC(prodpos) == conspos)
+#define REPLY_OBJ_EMPTY (prodpos == conspos)
 NORETURN void syscall_loop(seL4_CPtr ep)
 {
-    seL4_CPtr reply = 0;
-    ut_t * reply_ut = NULL;
+    // TODO: check if this is in global instead of stack
+    static seL4_CPtr replyobjs[REPLY_OBJ_COUNT];
+    memset(replyobjs, 0, sizeof(replyobjs));
+
+    // cons == prod     : empty
+    // prod == cons - 1 : full
+    uint16_t prodpos = REPLY_OBJ_COUNT - 1, conspos = 0;
 
     while (1) {
-        /* Create reply object */
-        // we'll need to realloc a new reply object, as the old one may take a while
-        // to be replied and we have to serve new requests.
-        // only reallocate reply object if the previous code path didn't use it
-        if(!reply_ut) {
-            reply_ut = alloc_retype(&reply, seL4_ReplyObject, seL4_ReplyBits);
-            if (reply_ut == NULL) {
-                ZF_LOGF("Failed to alloc reply object ut");
-            }
-        }
+        // it is impossible that the reply object is full, as there is at most
+        // number of processes + 1 outstanding threads. all background thread handlers
+        // are expected to return the reply object after they finished.
+        ZF_LOGF_IF(REPLY_OBJ_EMPTY, "Reply object array is empty @ syscall_loop!");
 
+        /* Create reply object if needed */
+        seL4_CPtr* reply = replyobjs + conspos;
+        if(!*reply) 
+            ZF_LOGF_IF(!alloc_retype(reply, seL4_ReplyObject, seL4_ReplyBits),
+                "Cannot allocate reply object");
+            
         seL4_Word badge = 0;
         /* Block on ep, waiting for an IPC sent over ep, or
          * a notification from our bound notification object */
-        seL4_MessageInfo_t message = seL4_Recv(ep, &badge, reply);
+        seL4_MessageInfo_t message = seL4_Recv(ep, &badge, *reply);
         /* Awake! We got a message - check the label and badge to
          * see what the message is about */
         seL4_Word label = seL4_MessageInfo_get_label(message);
@@ -297,25 +305,34 @@ NORETURN void syscall_loop(seL4_CPtr ep)
              * object! */
             sos_handle_irq_notification(&badge);
         } else if (label == seL4_Fault_NullFault) {
-            /* It's not a fault or an interrupt, it must be an IPC
-             * message from tty_test! */
-            // pass the reply_ut also so that we can tell ut that the reply object is no
-            // longer used
-            if(badge & INT_THRD_BADGE_FLAG)
-                // must be a delegate request from SOS' non main threads
-                handle_delegate_req(badge, msglen, reply, reply_ut);
-            else
-                // from user app
-                handle_syscall(badge, reply, reply_ut);
-            // indicate to the next loop that we used this reply object
-            reply_ut = NULL;
+            switch(badge)
+            {
+                case BADGE_DELEGATE:
+                    handle_delegate_req(badge, msglen, *reply);
+                    break;
+                case BADGE_REPLY_RET:
+                    // we trust whoever send us this!
+                    ZF_LOGF_IF(REPLY_OBJ_FULL, "Reply object array is full on REPLY_RET");
+                    replyobjs[prodpos] = seL4_GetMR(0);
+                    prodpos = REPLY_POS_INC(prodpos);
+                    // reply!
+                    message = seL4_MessageInfo_new(0, 0, 0, 0);
+                    seL4_Send(*reply, message);
+                    break;
+                default:
+                    // handle_syscall returns false if it needs the reply object later
+                    if(!handle_syscall(badge, msglen, *reply)) 
+                        conspos = REPLY_POS_INC(conspos);
+            }
         } else {
-            handle_fault(badge, message, reply, reply_ut);
-            // indicate to the next loop that we used this reply object
-            reply_ut = NULL;
+            handle_fault(badge, message, *reply);
         }
     }
 }
+#undef REPLY_OBJ_COUNT
+#undef REPLY_POS_INC
+#undef REPLY_OBJ_FULL
+#undef REPLY_OBJ_EMPTY
 
 static int stack_write(seL4_Word *mapped_stack, int index, uintptr_t val)
 {
@@ -668,7 +685,8 @@ void scratchas_init(void)
     // preallocate scratchas w/ the size of background worker threads, so that we don't have to depend on
     // the thread safety of malloc
     dynarray_init(&scratchas, sizeof(addrspace_t));
-    ZF_LOGF_IF(!dynarray_resize(&scratchas, BG_HANDLERS + 1), "Cannot allocate array for scratch address space.");
+    // TODO: GRP01: make thread safe
+    ZF_LOGF_IF(!dynarray_resize(&scratchas, 8), "Cannot allocate array for scratch address space.");
     // lock for scratch space
     seL4_CPtr ntfn;
     ut_t* ntfn_ut = alloc_retype(&ntfn, seL4_NotificationObject, seL4_NotificationBits);
@@ -691,6 +709,7 @@ NORETURN void *main_continued(UNUSED void *arg)
     frame_table_init(&cspace, seL4_CapInitThreadVSpace);
 
     // GRP01: init OS parts here
+    delegate_init(&cspace, ipc_ep);
     scratchas_init();
     fileman_init();
     init_threads(ipc_ep, sched_ctrl_start, sched_ctrl_end);

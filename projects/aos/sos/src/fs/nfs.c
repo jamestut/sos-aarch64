@@ -39,6 +39,13 @@ typedef struct {
     sync_bin_sem_t lck;
 } poolobj_t;
 
+typedef union {
+    uintptr_t nfsfh; // for open
+    void* readtarget;
+    sos_stat_t* stattarget;
+    struct nfsdir* nfsdir;
+} multipurpose_word_t;
+
 typedef enum {
     CMD_OPEN,
     CMD_CLOSE,
@@ -50,26 +57,19 @@ typedef enum {
 } CmdType;
 
 typedef struct {
+    ssize_t status; // <0 = errno, >=0 = success
     CmdType type;
-    size_t poolidx;
-} cbparam_t;
+    multipurpose_word_t data;
+    seL4_CPtr ntfn;
+} cb_param_t;
 
-static struct {
-    poolobj_t objs[BG_HANDLERS];
-    sync_mutex_t lck;
-    // used for acquire pool
-    uint32_t clockhand;
-} pool = {0};
+// fileman will give us a PID to guarantee that same PID = same thread
+// we can leverage this fact to store notification objects to avoid
+// recreating/freeing them over and over again
+seL4_CPtr ntfnpool[MAX_PID] = {0};
 
 /* ---- callbacks for libnfs ---- */
 void cb_generic(int status, struct nfs_context *nfs, void *data, void *private_data);
-
-/* ---- util functions ---- */
-size_t acquire_pool(void);
-
-void convert_stat(struct stat* src, sos_stat_t* dst);
-
-void free_pool(size_t idx);
 
 /* ---- macros ---- */
 #define GRP01_NFS_CHECK \
@@ -78,101 +78,69 @@ void free_pool(size_t idx);
         return -EIO; \
     }
 
-#define GRP01_NFS_PREAMBLE(paramtype) \
-    cbparam_t param; \
-    param.poolidx = acquire_pool(); \
+#define GRP01_NFS_ASYNC_PREAMBLE(paramtype) \
+    cb_param_t param; \
     param.type = (paramtype); \
-    poolobj_t* mypool = pool.objs + param.poolidx; \
-    \
-    mypool->asyncfinish = false; \
-    mypool->status = 0; \
+    param.ntfn = ntfnpool[pid]; \
+    seL4_Poll(param.ntfn, NULL);
 
-#define GRP01_NFS_WAIT_ASYNC_FINISH \
-    sync_bin_sem_wait(&mypool->lck); \
-    while(!mypool->asyncfinish) \
-        sync_cv_wait(&mypool->lck, &mypool->cv); \
-    sync_bin_sem_post(&mypool->lck); \
-
+/* ---- util functions ---- */
+void convert_stat(struct stat* src, sos_stat_t* dst);
 
 void grp01_nfs_init()
 {
-    ZF_LOGI("Initializing GRP01 NFS sync primitives.");
-
-    // mutex for the whole pool
-    seL4_CPtr ntfn;
-    if(!alloc_retype(&ntfn, seL4_NotificationObject, seL4_NotificationBits)) {
-        ZF_LOGE("Error creating notification object");
-        return;
-    }
-    sync_mutex_init(&pool.lck, ntfn);
-
-    // initialize sync primitives for bg workers
-    for(int i = 0; i < BG_HANDLERS; ++i) {
-        if(!alloc_retype(&ntfn, seL4_NotificationObject, seL4_NotificationBits)) {
-            ZF_LOGE("Error creating notification object");
-            return;
-        }
-        sync_bin_sem_init(&pool.objs[i].lck, ntfn, 1);
-
-        if(!alloc_retype(&ntfn, seL4_NotificationObject, seL4_NotificationBits)) {
-            ZF_LOGE("Error creating notification object");
-            return;
-        }
-        sync_cv_init(&pool.objs[i].cv, ntfn);
+    // create notification objects on pool
+    for(int i = 0; i < MAX_PID; ++i) {
+        ZF_LOGF_IF(!alloc_retype(ntfnpool + i, seL4_NotificationObject, seL4_NotificationBits),
+            "Error creating notification object pool for NFS driver");
     }
 }
 
-ssize_t grp01_nfs_open(seL4_CPtr ep, const char* fn, int mode)
+ssize_t grp01_nfs_open(seL4_Word pid, const char* fn, int mode)
 {
     GRP01_NFS_CHECK
-    GRP01_NFS_PREAMBLE(CMD_OPEN)
+    GRP01_NFS_ASYNC_PREAMBLE(CMD_OPEN)
     
     ssize_t ret;
     // we intentionally include O_CREAT here as sosh doesn't pass this flag
     // otherwise, cp on unmodified sosh will fail
-    ret = delegate_libnfs_open_async(ep, fn, mode | O_CREAT, cb_generic, &param);
+    ret = sos_libnfs_open_async(fn, mode | O_CREAT, cb_generic, &param);
     if(ret) {
         ZF_LOGI("Error initializing NFS open.");
         ret = -EIO;
     } else {
-        GRP01_NFS_WAIT_ASYNC_FINISH
+        seL4_Wait(param.ntfn, NULL);
 
-        if(mypool->status)
-            // ret is negative errno
-            ret = mypool->status;
+        if(param.status)
+            ret = param.status;
         else
             // zero status = success
-            ret = mypool->multipurpose.nfsfh;
+            ret = param.data.nfsfh;
     }
 
-    free_pool(param.poolidx);
     return ret;
 }
 
-ssize_t grp01_nfs_read(seL4_CPtr ep, ssize_t id, void* ptr, off_t offset, size_t len)
+ssize_t grp01_nfs_read(seL4_Word pid, ssize_t id, void* ptr, off_t offset, size_t len)
 {
-    GRP01_NFS_CHECK
-    GRP01_NFS_PREAMBLE(CMD_READ)
-    
+    GRP01_NFS_ASYNC_PREAMBLE(CMD_READ)
+
     ssize_t ret;
-    mypool->multipurpose.readtarget = ptr;
-    ret = delegate_libnfs_pread_async(ep, (struct nfsfh*)id, offset, len, cb_generic, &param);
+    param.data.readtarget = ptr;
+    ret = sos_libnfs_pread_async((struct nfsfh*)id, offset, len, cb_generic, &param);
     if(ret) {
         ZF_LOGI("Error initializing NFS pread.");
         ret = -EIO;
     } else {
-        GRP01_NFS_WAIT_ASYNC_FINISH
-
-        ret = mypool->status;
+        seL4_Wait(param.ntfn, NULL);
+        ret = param.status; // -0 == 0
     }
-    free_pool(param.poolidx);
     return ret;
 }
 
-ssize_t grp01_nfs_write(seL4_CPtr ep, ssize_t id, void* ptr, off_t offset, size_t len)
+ssize_t grp01_nfs_write(seL4_Word pid, ssize_t id, void* ptr, off_t offset, size_t len)
 {
-    GRP01_NFS_CHECK
-    GRP01_NFS_PREAMBLE(CMD_WRITE)
+    GRP01_NFS_ASYNC_PREAMBLE(CMD_WRITE)
 
     ssize_t ret;
     size_t rem = len;
@@ -183,155 +151,128 @@ ssize_t grp01_nfs_write(seL4_CPtr ep, ssize_t id, void* ptr, off_t offset, size_
         size_t towrite = MIN(rem, MAX_LIBNFS_CHUNK);
         
         // don't forget to reset the callback status for each loop!
-        mypool->asyncfinish = false;
-        mypool->status = 0;
+        param.status = 0;
 
-        ret = delegate_libnfs_pwrite_async(ep, (struct nfsfh*)id, offset + acc, towrite, 
+        ret = sos_libnfs_pwrite_async((struct nfsfh*)id, offset + acc, towrite, 
             (void*)((uintptr_t)ptr + acc), cb_generic, &param);
         if(ret) {
             ZF_LOGI("Error initializing NFS pwrite.");
             err = -EIO;
             break;
         } else {
-            GRP01_NFS_WAIT_ASYNC_FINISH
+            seL4_Wait(param.ntfn, NULL);
 
-            if(mypool->status < 0) {
-                err = mypool->status;
+            if(param.status < 0) {
+                err = param.status;
                 break;
             }
             
             // update offset and remaining
-            rem -= mypool->status;
-            acc += mypool->status;
-            // premature stopping whenlibnfs wrote less than what we asked
-            if(mypool->status < towrite)
+            rem -= param.status;
+            acc += param.status;
+            // premature stopping when libnfs wrote less than what we asked
+            if(param.status < towrite)
                 break;
         }
     }
 
-    free_pool(param.poolidx);
     if(err)
         return err;
     return acc;
 }
 
-ssize_t grp01_nfs_stat(seL4_CPtr ep, char* path, sos_stat_t* out)
+ssize_t grp01_nfs_stat(seL4_Word pid, char* path, sos_stat_t* out)
 {
     GRP01_NFS_CHECK
-    GRP01_NFS_PREAMBLE(CMD_STAT)
+    GRP01_NFS_ASYNC_PREAMBLE(CMD_STAT)
 
     ssize_t ret;
-    mypool->multipurpose.stattarget = out;
-    ret = delegate_libnfs_stat_async(ep, path, cb_generic, &param);
+    param.data.stattarget = out;
+    ret = sos_libnfs_stat_async(path, cb_generic, &param);
     if(ret) {
         ZF_LOGE("Error retreiving stat");
         ret = -EIO;
     } else {
-        GRP01_NFS_WAIT_ASYNC_FINISH
-        ret = mypool->status;
+        seL4_Wait(param.ntfn, NULL);
+        ret = param.status;
     }
 
-    free_pool(param.poolidx);
     return ret;
 }
 
-ssize_t grp01_nfs_opendir(seL4_CPtr ep, char* path)
+ssize_t grp01_nfs_opendir(seL4_Word pid, char* path)
 {
     GRP01_NFS_CHECK
-    GRP01_NFS_PREAMBLE(CMD_OPENDIR)
+    GRP01_NFS_ASYNC_PREAMBLE(CMD_OPENDIR)
 
     ssize_t ret;
-    ret = delegate_libnfs_opendir_async(ep, path, cb_generic, &param);
+    ret = sos_libnfs_opendir_async(path, cb_generic, &param);
     if(ret) {
         ZF_LOGE("Error opening directory");
         ret = -EIO;
     } else {
-        GRP01_NFS_WAIT_ASYNC_FINISH
-        ret = mypool->status;
+        seL4_Wait(param.ntfn, NULL);
+        ret = param.status;
         if(!ret)
-            ret = mypool->multipurpose.nfsdir;
+            ret = param.data.nfsdir;
     }
 
-    free_pool(param.poolidx);
     return ret;
 }
 
-const char* grp01_nfs_dirent(seL4_CPtr ep, ssize_t id, size_t pos)
+const char* grp01_nfs_dirent(seL4_Word pid, ssize_t id, size_t pos)
 {
-    if(!check_nfs_mount_status()) {
-        ZF_LOGE("NFS mount error");
-        return NULL;
-    }
-    GRP01_NFS_PREAMBLE(CMD_OTHER)
-
-    const char* ret = delegate_libnfs_dirent(ep, id, pos);
-
-    free_pool(param.poolidx);
-    return ret;
+    return sos_libnfs_readdir(id, pos);
 }
 
-void grp01_nfs_closedir(seL4_CPtr ep, ssize_t id)
+void grp01_nfs_closedir(seL4_Word pid, ssize_t id)
 {
-    if(!check_nfs_mount_status()) {
-        ZF_LOGE("NFS mount error");
-        return;
-    }
-    GRP01_NFS_PREAMBLE(CMD_OTHER)
-
-    delegate_libnfs_closedir(ep, id);
-    free_pool(param.poolidx);
+    sos_libnfs_closedir(id);
 }
 
-void grp01_nfs_close(seL4_CPtr ep, ssize_t id)
+void grp01_nfs_close(seL4_Word pid, ssize_t id)
 {
-    if(!check_nfs_mount_status()) {
-        ZF_LOGE("NFS mount error");
-        return;
-    }
-    GRP01_NFS_PREAMBLE(CMD_CLOSE)
+    GRP01_NFS_ASYNC_PREAMBLE(CMD_CLOSE)    
 
     ssize_t ret;
-    ret = delegate_libnfs_close_async(ep, (struct nfsfh*)id, cb_generic, &param);
+    ret = sos_libnfs_close_async((struct nfsfh*)id, cb_generic, &param);
     if(ret) {
         ZF_LOGE("Error closing NFS handle.");
     } else {
-        GRP01_NFS_WAIT_ASYNC_FINISH
-
-        if(mypool->status)
-            ZF_LOGE("NFS close with error %d", mypool->status);
+        seL4_Wait(param.ntfn, NULL);
+        if(param.status)
+            ZF_LOGE("NFS close with error %d", param.status);
     }
-    free_pool(param.poolidx);
 }
 
 void cb_generic(int status, struct nfs_context *nfs, void *data, void *private_data)
 {
-    cbparam_t* param = private_data;
-    poolobj_t *mypool = pool.objs + param->poolidx;
+    cb_param_t* param = private_data;
 
     // set result
-    mypool->status = status;
+    param->status = status;
     if(status < 0) {
         ZF_LOGE("Failed to process NFS request: %s", data);
     } else {
         // success. actions and return info depends on command!
         switch(param->type) {
             case CMD_OPEN:
-                mypool->multipurpose.nfsfh = (uintptr_t)data;
+                param->data.nfsfh = (uintptr_t)data;
                 break;
             case CMD_READ:
                 if(status > 0) {
                     // fingers crossed that fileman is providing a correct pointer here!
-                    memcpy(mypool->multipurpose.readtarget, data, status);
+                    memcpy(param->data.readtarget, data, status);
                 }
                 break;
             case CMD_WRITE:
             case CMD_CLOSE:
                 break;
             case CMD_STAT:
-                convert_stat(data, mypool->multipurpose.stattarget);
+                convert_stat(data, param->data.stattarget);
                 break;
             case CMD_OPENDIR:
-                mypool->multipurpose.nfsdir = data;
+                param->data.nfsdir = data;
                 break;
             default:
                 // DEBUG. remove assert after finished!
@@ -340,35 +281,7 @@ void cb_generic(int status, struct nfs_context *nfs, void *data, void *private_d
     }
 
     // notify parent
-    sync_bin_sem_wait(&mypool->lck);
-    mypool->asyncfinish = true;
-    sync_cv_signal(&mypool->cv);
-    sync_bin_sem_post(&mypool->lck);
-}
-
-size_t acquire_pool()
-{
-    sync_mutex_lock(&pool.lck);
-    ssize_t ret = -1;
-    for(size_t i=0; i<BG_HANDLERS; ++i) {
-        pool.clockhand = (pool.clockhand + 1) % BG_HANDLERS;
-        if(!pool.objs[pool.clockhand].used) {
-            pool.objs[pool.clockhand].used = true;
-            ret = pool.clockhand;
-            break;
-        }
-    }
-    sync_mutex_unlock(&pool.lck);
-    // should never happen
-    ZF_LOGF_IF(ret == -1, "Cannot grab a pool for NFS");
-    return ret;
-}
-
-void free_pool(size_t idx)
-{
-    sync_mutex_lock(&pool.lck);
-    pool.objs[idx].used = false;
-    sync_mutex_unlock(&pool.lck);
+    seL4_Signal(param->ntfn);
 }
 
 /* useless definitions that interferes with our data structure! */
