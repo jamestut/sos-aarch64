@@ -77,6 +77,8 @@ add_executable(
     src/delegate.c
     src/fs/nfs.c
     src/fs/fake.c
+    # GRP01: re-arch
+    src/proctable.c
 )
 target_include_directories(sos PRIVATE "include" "../libsosapi/include")
 target_link_libraries(

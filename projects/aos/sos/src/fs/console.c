@@ -47,7 +47,7 @@ enum perm {
     PERM_WR = 2
 };
 
-ssize_t console_fs_open(UNUSED seL4_CPtr ep, UNUSED const char* fn, int mode)
+ssize_t console_fs_open(UNUSED seL4_Word pid, UNUSED const char* fn, int mode)
 {
     // stateless!
     switch(mode) {
@@ -62,7 +62,7 @@ ssize_t console_fs_open(UNUSED seL4_CPtr ep, UNUSED const char* fn, int mode)
     }
 }
 
-void console_fs_close(UNUSED seL4_CPtr ep, UNUSED ssize_t id) { /* stateless! do nothing! */ }
+void console_fs_close(UNUSED seL4_Word pid, UNUSED ssize_t id) { /* stateless! do nothing! */ }
 
 // platform specific functions
 #ifdef CONFIG_PLAT_ODROIDC2
@@ -90,7 +90,7 @@ void console_fs_init(void)
     }
 }
 
-ssize_t console_fs_read(seL4_CPtr ep, ssize_t id, void* ptr, UNUSED off_t offset, size_t len)
+ssize_t console_fs_read(seL4_Word pid, ssize_t id, void* ptr, UNUSED off_t offset, size_t len)
 {
     if(id & PERM_RD) {
         // truncate!
@@ -146,7 +146,7 @@ ssize_t console_fs_read(seL4_CPtr ep, ssize_t id, void* ptr, UNUSED off_t offset
         return EBADF * -1;
 }
 
-ssize_t console_fs_write(seL4_CPtr ep, ssize_t id, void* ptr, UNUSED off_t offset, size_t len)
+ssize_t console_fs_write(seL4_Word pid, ssize_t id, void* ptr, UNUSED off_t offset, size_t len)
 {
     // WARNING! pico TCP might drop some data if it is larger than MTU
     if(id & PERM_WR) {
