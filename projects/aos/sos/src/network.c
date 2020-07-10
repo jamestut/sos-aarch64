@@ -51,6 +51,7 @@
 #include "irq.h"
 #include "ut.h"
 #include "utils.h"
+#include "threads.h"
 
 
 #ifndef SOS_NFS_DIR
@@ -64,9 +65,12 @@
 #define NETWORK_IRQ (40)
 #define WATCHDOG_TIMEOUT 1000
 
+#define IRQ_IDENT_BIT  BIT(31)
+#define IRQ_IDENT_MASK MASK(31)
+
 #define DHCP_STATUS_WAIT        0
 #define DHCP_STATUS_FINISHED    1
-#define DHCP_STATUS_ERR         2
+#define DHCP_STATUS_ERR         2 
 
 static struct pico_device pico_dev;
 struct nfs_context *nfs = NULL;
@@ -74,14 +78,30 @@ static int dhcp_status = DHCP_STATUS_WAIT;
 static char nfs_dir_buf[PATH_MAX];
 static uint8_t ip_octet;
 
+// used during initialisation only.
+// both ut and cap will be freed after finish 
 struct {
-    sync_cv_t cv;
-    sync_bin_sem_t lck;
-    bool initialmountfinished;
     bool initialmountsuccess;
 } nfs_status = {0};
 
+// for network thread
+struct {
+    sos_thread_t* thrd;
+    // multiple use kernel objects
+    // used exclusively by network thread
+    seL4_CPtr ntfn;
+    seL4_CPtr ep;
+    seL4_CPtr reply;
+    // hardcoded IRQ handlers
+    seL4_IRQHandler watchdog_irqhdl;
+    seL4_IRQHandler network_irqhdl;
+} netthrd = {0};
+
 static void nfs_mount_cb(int status, struct nfs_context *nfs, void *data, void *private_data);
+
+static void network_handle_irq(seL4_Word badge);
+
+static void network_thread(void*);
 
 static int pico_eth_send(UNUSED struct pico_device *dev, void *input_buf, int len)
 {
@@ -184,18 +204,6 @@ static int network_tick(
     return 0;
 }
 
-static void init_irq(
-    int irq_number,
-    int edge_triggered,
-    sos_irq_callback_t callback
-)
-{
-    seL4_IRQHandler irq_handler = 0;
-    int init_irq_err = sos_register_irq_handler(irq_number, edge_triggered, callback, NULL, &irq_handler);
-    ZF_LOGF_IF(init_irq_err != 0, "Failed to initialise IRQ");
-    seL4_IRQHandler_Ack(irq_handler);
-}
-
 void dhcp_callback(void *cli, int code)
 {
     if (code != PICO_DHCP_SUCCESS) {
@@ -219,26 +227,72 @@ void dhcp_callback(void *cli, int code)
     dhcp_status = DHCP_STATUS_FINISHED;
 }
 
+bool init_irq(seL4_Word irq, bool edge_triggered, seL4_IRQHandler* irqhdl)
+{
+    int err;
+    *irqhdl = cspace_alloc_slot(&cspace);
+    if(*irqhdl == seL4_CapNull) {
+        ZF_LOGE("Cannot create cspace slot for IRQ");
+        return false;
+    }
+    
+    err = cspace_irq_control_get(&cspace, *irqhdl, seL4_CapIRQControl, irq, edge_triggered);
+    if(err != seL4_NoError) {
+        ZF_LOGE("Error seL4 IRQ trigger: %d", err);
+        return false;
+    }
+
+    // we'renot going to free this cap later on, so we'll let it leak
+    seL4_CPtr badgedntfn = cspace_alloc_slot(&cspace);
+    if(badgedntfn == seL4_CapNull) {
+        ZF_LOGE("Cannot allocate capability slot");
+        return false;
+    }
+
+    err = cspace_mint(&cspace, badgedntfn, &cspace, netthrd.ntfn, seL4_AllRights, IRQ_IDENT_BIT | irq);
+    if(err != seL4_NoError) {
+        ZF_LOGE("Error minting notification: %d", err);
+        return false;
+    }
+
+    err = seL4_IRQHandler_SetNotification(*irqhdl, badgedntfn);
+    if(err != seL4_NoError) {
+        ZF_LOGE("Error setting notification for network IRQ: %d", err);
+        return false;
+    }
+
+    // ack and enable the interrupt!
+    seL4_IRQHandler_Ack(*irqhdl);
+    return true;
+}
+
 void network_init(cspace_t *cspace, void *timer_vaddr, seL4_CPtr irq_ntfn)
 {
     int error;
     ZF_LOGI("\nInitialising network...\n\n");
 
     // setup sync variables so that clients know if we finished mount
-    seL4_CPtr ntfn;
-    if(!alloc_retype(&ntfn, seL4_NotificationObject, seL4_NotificationBits))
-        ZF_LOGF("Failed to create notification.");
-    sync_bin_sem_init(&nfs_status.lck, ntfn, 1);
-    if(!alloc_retype(&ntfn, seL4_NotificationObject, seL4_NotificationBits))
-        ZF_LOGF("Failed to create notification.");
-    sync_cv_init(&nfs_status.cv, ntfn);
+    seL4_CPtr mount_ntfn;
+    ut_t* mount_ntfn_ut = alloc_retype(&mount_ntfn, seL4_NotificationObject, seL4_NotificationBits);
+    ZF_LOGF_IF(!mount_ntfn_ut, "Failed to allocate notification for NFS mount");
+    // set that notif to zero
+    seL4_Poll(mount_ntfn, NULL);
+
+    // create kernel objects for network thread
+    ZF_LOGF_IF(!alloc_retype(&netthrd.ntfn, seL4_NotificationObject, seL4_NotificationBits),
+        "Failed to create notification");
+    ZF_LOGF_IF(!alloc_retype(&netthrd.ep, seL4_EndpointObject, seL4_EndpointBits),
+        "Failed to create endpoint for network thread");
+    ZF_LOGF_IF(!alloc_retype(&netthrd.reply, seL4_ReplyObject, seL4_ReplyBits),
+        "Failed to create reply object for network thread");
 
     /* set up the network device irq */
-    init_irq(NETWORK_IRQ, true, network_irq);
+    ZF_LOGF_IF(!init_irq(NETWORK_IRQ, true, &netthrd.network_irqhdl), 
+        "Failed to initialize network IRQ");
 
     /* set up the network tick irq (watchdog timer) */
-    init_irq(WATCHDOG_IRQ, true, network_tick);
-
+    ZF_LOGF_IF(!init_irq(WATCHDOG_IRQ, true, &netthrd.watchdog_irqhdl),
+        "Failed to initialize network watchdog IRQ");
 
     /* Initialise ethernet interface first, because we won't bother initialising
      * picotcp if the interface fails to be brought up */
@@ -283,10 +337,12 @@ void network_init(cspace_t *cspace, void *timer_vaddr, seL4_CPtr irq_ntfn)
 
     /* handle all interrupts until dhcp negotiation finished
      * this is needed so we can receive and handle dhcp response */
+    puts("Handling IRQ for DHCP");
     do {
         seL4_Word badge;
-        seL4_Wait(irq_ntfn, &badge);
-        sos_handle_irq_notification(&badge);
+        seL4_Wait(netthrd.ntfn, &badge);
+        if(badge & IRQ_IDENT_BIT)
+            network_handle_irq(badge & IRQ_IDENT_MASK);
         if (dhcp_status == DHCP_STATUS_ERR) {
             ZF_LOGD("restarting dhcp negotiation");
             error = pico_dhcp_initiate_negotiation(&pico_dev, dhcp_callback, &dhcp_xid);
@@ -303,8 +359,24 @@ void network_init(cspace_t *cspace, void *timer_vaddr, seL4_CPtr irq_ntfn)
 
     nfs_set_debug(nfs, 10);
     sprintf(nfs_dir_buf, "%s-%d-root", SOS_NFS_DIR, ip_octet);
-    int ret = nfs_mount_async(nfs, CONFIG_SOS_GATEWAY, nfs_dir_buf, nfs_mount_cb, NULL);
+    int ret = nfs_mount_async(nfs, CONFIG_SOS_GATEWAY, nfs_dir_buf, nfs_mount_cb, &mount_ntfn);
     ZF_LOGF_IF(ret != 0, "NFS Mount failed: %s", nfs_get_error(nfs));
+
+    // create network thread.
+    netthrd.thrd = spawn(network_thread, NULL, "network_thread", 0, netthrd.ep, 0);
+    ZF_LOGF_IF(!netthrd.thrd, "Error creating network thread");
+    // bind ntfn to TCB so that the thread can receive IRQ
+    error = seL4_TCB_BindNotification(netthrd.thrd->tcb, netthrd.ntfn);
+    ZF_LOGF_IF(error, "Failed to bind notification object to TCB");
+
+    // wait until NFS finishes mounting
+    puts("Waiting for root NFS to finish mounting ...");
+    seL4_Wait(mount_ntfn, NULL);
+    
+    // cleanup caps that we use to wait NFS to finish mount
+    cspace_delete(cspace, mount_ntfn);
+    cspace_free_slot(cspace, mount_ntfn);
+    ut_free(mount_ntfn_ut);
 }
 
 void nfs_mount_cb(int status, UNUSED struct nfs_context *nfs, void *data,
@@ -317,22 +389,40 @@ void nfs_mount_cb(int status, UNUSED struct nfs_context *nfs, void *data,
         nfs_status.initialmountsuccess = true;
     }
 
-    // wake up client
-    sync_bin_sem_wait(&nfs_status.lck);
-    nfs_status.initialmountfinished = true;
-    sync_cv_broadcast_release(&nfs_status.lck, &nfs_status.cv);
+    // wake up parent
+    seL4_Signal(*((seL4_CPtr*)private_data));
 }
 
 bool check_nfs_mount_status(void)
 {
-    if(!nfs_status.initialmountfinished) {
-        sync_bin_sem_wait(&nfs_status.lck);
-        while(!nfs_status.initialmountfinished)
-            sync_cv_wait(&nfs_status.lck, &nfs_status.cv);
-        sync_bin_sem_post(&nfs_status.lck);
-    }
-
     return nfs_status.initialmountsuccess;
+}
+
+static void network_thread(UNUSED void* data)
+{
+    for(;;) {
+        seL4_Word badge;
+        seL4_MessageInfo_t message = seL4_Recv(netthrd.ep, &badge, netthrd.reply);
+        if(badge & IRQ_IDENT_BIT) {
+            network_handle_irq(badge & IRQ_IDENT_MASK);
+        } else {
+            // TODO: delegate!
+        }
+    }
+}
+
+static void network_handle_irq(seL4_Word badge)
+{
+    switch(badge & IRQ_IDENT_MASK) {
+        case WATCHDOG_IRQ:
+            network_tick(NULL, WATCHDOG_IRQ, netthrd.watchdog_irqhdl);
+            break;
+        case NETWORK_IRQ:
+            network_irq(NULL, NETWORK_IRQ, netthrd.network_irqhdl);
+            break;
+        default:
+            ZF_LOGF("Unknown IRQ");
+    }
 }
 
 int sos_libnfs_open_async(const char *path, int flags, nfs_cb cb, void *private_data)
