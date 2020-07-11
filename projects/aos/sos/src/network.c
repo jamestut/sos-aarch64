@@ -63,14 +63,18 @@
 #endif
 
 #define NETWORK_IRQ (40)
-#define WATCHDOG_TIMEOUT 1005
+#define WATCHDOG_TIMEOUT 500
 
 #define IRQ_IDENT_BIT  BIT(31)
-#define IRQ_IDENT_MASK MASK(31)
 
 #define DHCP_STATUS_WAIT        0
 #define DHCP_STATUS_FINISHED    1
-#define DHCP_STATUS_ERR         2 
+#define DHCP_STATUS_ERR         2
+
+// use these as notification badge, so we can figure out
+// which interrupt fires.
+#define WATCHDOG_IRQ_BIT         1
+#define NETWORK_IRQ_BIT          2
 
 static struct pico_device pico_dev;
 struct nfs_context *nfs = NULL;
@@ -239,7 +243,7 @@ void dhcp_callback(void *cli, int code)
     dhcp_status = DHCP_STATUS_FINISHED;
 }
 
-bool init_irq(seL4_Word irq, bool edge_triggered, seL4_IRQHandler* irqhdl)
+bool init_irq(seL4_Word irq, bool edge_triggered, seL4_IRQHandler* irqhdl, seL4_Word irq_id)
 {
     int err;
     *irqhdl = cspace_alloc_slot(&cspace);
@@ -260,8 +264,8 @@ bool init_irq(seL4_Word irq, bool edge_triggered, seL4_IRQHandler* irqhdl)
         ZF_LOGE("Cannot allocate capability slot");
         return false;
     }
-
-    err = cspace_mint(&cspace, badgedntfn, &cspace, netthrd.ntfn, seL4_AllRights, IRQ_IDENT_BIT | irq);
+    
+    err = cspace_mint(&cspace, badgedntfn, &cspace, netthrd.ntfn, seL4_AllRights, IRQ_IDENT_BIT | irq_id);
     if(err != seL4_NoError) {
         ZF_LOGE("Error minting notification: %d", err);
         return false;
@@ -299,11 +303,11 @@ void network_init(cspace_t *cspace, void *timer_vaddr, seL4_CPtr irq_ntfn)
         "Failed to create reply object for network thread");
 
     /* set up the network device irq */
-    ZF_LOGF_IF(!init_irq(NETWORK_IRQ, true, &netthrd.network_irqhdl), 
+    ZF_LOGF_IF(!init_irq(NETWORK_IRQ, true, &netthrd.network_irqhdl, NETWORK_IRQ_BIT), 
         "Failed to initialize network IRQ");
 
     /* set up the network tick irq (watchdog timer) */
-    ZF_LOGF_IF(!init_irq(WATCHDOG_IRQ, true, &netthrd.watchdog_irqhdl),
+    ZF_LOGF_IF(!init_irq(WATCHDOG_IRQ, true, &netthrd.watchdog_irqhdl, WATCHDOG_IRQ_BIT),
         "Failed to initialize network watchdog IRQ");
 
     /* Initialise ethernet interface first, because we won't bother initialising
@@ -354,7 +358,7 @@ void network_init(cspace_t *cspace, void *timer_vaddr, seL4_CPtr irq_ntfn)
         seL4_Word badge;
         seL4_Wait(netthrd.ntfn, &badge);
         if(badge & IRQ_IDENT_BIT)
-            network_handle_irq(badge & IRQ_IDENT_MASK);
+            network_handle_irq(badge);
         if (dhcp_status == DHCP_STATUS_ERR) {
             ZF_LOGD("restarting dhcp negotiation");
             error = pico_dhcp_initiate_negotiation(&pico_dev, dhcp_callback, &dhcp_xid);
@@ -416,7 +420,7 @@ static void network_thread(UNUSED void* data)
         seL4_Word badge;
         seL4_MessageInfo_t message = seL4_Recv(netthrd.ep, &badge, netthrd.reply);
         if(badge & IRQ_IDENT_BIT) {
-            network_handle_irq(badge & IRQ_IDENT_MASK);
+            network_handle_irq(badge);
         } else {
             seL4_Word ret;
             switch(seL4_GetMR(0)) {
@@ -467,16 +471,12 @@ static void network_thread(UNUSED void* data)
 
 static void network_handle_irq(seL4_Word badge)
 {
-    switch(badge & IRQ_IDENT_MASK) {
-        case WATCHDOG_IRQ:
-            network_tick(NULL, WATCHDOG_IRQ, netthrd.watchdog_irqhdl);
-            break;
-        case NETWORK_IRQ:
-            network_irq(NULL, NETWORK_IRQ, netthrd.network_irqhdl);
-            break;
-        default:
-            ZF_LOGF("Unknown IRQ");
-    }
+    // hardcoded to make processing faster!
+    // we also assume that caller already checked if badge is indeed from IRQ ntfn
+    if(badge & WATCHDOG_IRQ_BIT)
+        network_tick(NULL, WATCHDOG_IRQ, netthrd.watchdog_irqhdl);
+    if(badge & NETWORK_IRQ_BIT)
+        network_irq(NULL, NETWORK_IRQ, netthrd.network_irqhdl);
 }
 
 int sos_libnfs_open_async(const char *path, int flags, nfs_cb cb, void *private_data)
