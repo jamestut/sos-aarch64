@@ -63,14 +63,18 @@
 #endif
 
 #define NETWORK_IRQ (40)
-#define WATCHDOG_TIMEOUT 1005
+#define WATCHDOG_TIMEOUT 500
 
 #define IRQ_IDENT_BIT  BIT(31)
 #define IRQ_IDENT_MASK MASK(31)
 
 #define DHCP_STATUS_WAIT        0
 #define DHCP_STATUS_FINISHED    1
-#define DHCP_STATUS_ERR         2 
+#define DHCP_STATUS_ERR         2
+
+// to differentiate the simultaneous IRQ
+#define WATCHDOG_IRQ_ID 1
+#define NETWORK_IRQ_ID  2
 
 static struct pico_device pico_dev;
 struct nfs_context *nfs = NULL;
@@ -239,7 +243,7 @@ void dhcp_callback(void *cli, int code)
     dhcp_status = DHCP_STATUS_FINISHED;
 }
 
-bool init_irq(seL4_Word irq, bool edge_triggered, seL4_IRQHandler* irqhdl)
+bool init_irq(seL4_Word irq, bool edge_triggered, seL4_IRQHandler* irqhdl, seL4_Word irq_id)
 {
     int err;
     *irqhdl = cspace_alloc_slot(&cspace);
@@ -260,8 +264,9 @@ bool init_irq(seL4_Word irq, bool edge_triggered, seL4_IRQHandler* irqhdl)
         ZF_LOGE("Cannot allocate capability slot");
         return false;
     }
+    
 
-    err = cspace_mint(&cspace, badgedntfn, &cspace, netthrd.ntfn, seL4_AllRights, IRQ_IDENT_BIT | irq);
+    err = cspace_mint(&cspace, badgedntfn, &cspace, netthrd.ntfn, seL4_AllRights, IRQ_IDENT_BIT | irq_id);
     if(err != seL4_NoError) {
         ZF_LOGE("Error minting notification: %d", err);
         return false;
@@ -299,11 +304,11 @@ void network_init(cspace_t *cspace, void *timer_vaddr, seL4_CPtr irq_ntfn)
         "Failed to create reply object for network thread");
 
     /* set up the network device irq */
-    ZF_LOGF_IF(!init_irq(NETWORK_IRQ, true, &netthrd.network_irqhdl), 
+    ZF_LOGF_IF(!init_irq(NETWORK_IRQ, true, &netthrd.network_irqhdl, NETWORK_IRQ_ID), 
         "Failed to initialize network IRQ");
 
     /* set up the network tick irq (watchdog timer) */
-    ZF_LOGF_IF(!init_irq(WATCHDOG_IRQ, true, &netthrd.watchdog_irqhdl),
+    ZF_LOGF_IF(!init_irq(WATCHDOG_IRQ, true, &netthrd.watchdog_irqhdl, WATCHDOG_IRQ_ID),
         "Failed to initialize network watchdog IRQ");
 
     /* Initialise ethernet interface first, because we won't bother initialising
@@ -467,11 +472,20 @@ static void network_thread(UNUSED void* data)
 
 static void network_handle_irq(seL4_Word badge)
 {
+    // printf("badge is: %d\n", badge);
+    // printf("badge & mask is: %d\n", badge & IRQ_IDENT_MASK);
     switch(badge & IRQ_IDENT_MASK) {
-        case WATCHDOG_IRQ:
+        case WATCHDOG_IRQ_ID:
+            puts("network_tick");
             network_tick(NULL, WATCHDOG_IRQ, netthrd.watchdog_irqhdl);
             break;
-        case NETWORK_IRQ:
+        case NETWORK_IRQ_ID:
+            puts("network_irq");
+            network_irq(NULL, NETWORK_IRQ, netthrd.network_irqhdl);
+            break;
+        case WATCHDOG_IRQ_ID | NETWORK_IRQ_ID:
+            puts("double irq");
+            network_tick(NULL, WATCHDOG_IRQ, netthrd.watchdog_irqhdl);
             network_irq(NULL, NETWORK_IRQ, netthrd.network_irqhdl);
             break;
         default:
