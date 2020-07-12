@@ -50,6 +50,7 @@
 
 #include "grp01.h"
 #include "grp01/dynaarray.h"
+#include "fs/fake.h"
 
 // GRP01: M1
 #include "libclocktest.h"
@@ -84,7 +85,7 @@
 #define IRQ_EP_BADGE         BIT(seL4_BadgeBits - 1ul)
 #define IRQ_IDENT_BADGE_BITS MASK(seL4_BadgeBits - 1ul)
 
-#define TTY_NAME             "md5"
+#define TTY_NAME             "sosh"
 #define TTY_PRIORITY         (0)
 #define TTY_EP_BADGE         (101)
 
@@ -708,6 +709,11 @@ NORETURN void *main_continued(UNUSED void *arg)
     );
     frame_table_init(&cspace, seL4_CapInitThreadVSpace);
 
+    memset(proctable, 0, sizeof(proctable));
+    // fill in SOS' own process data!
+    proctable[0].active = true;
+    proctable[0].vspace = seL4_CapInitThreadVSpace;
+
     // GRP01: init OS parts here
     delegate_init(&cspace, ipc_ep);
     scratchas_init();
@@ -716,12 +722,10 @@ NORETURN void *main_continued(UNUSED void *arg)
     bgworker_init();
     start_fake_timer();
     grp01_map_bookkeep_init();
-    memset(proctable, 0, sizeof(proctable));
     ZF_LOGF_IF(!grp01_map_init(0, seL4_CapInitThreadVSpace), "Cannot init bookkepping for SOS frame map");
+    fake_fs_init(0x890295);
 
-    // fill in SOS' own process data!
-    proctable[0].active = true;
-    proctable[0].vspace = seL4_CapInitThreadVSpace;
+    
 
     /* run sos initialisation tests */
     run_tests(&cspace);

@@ -398,3 +398,8 @@ static seL4_ARM_Page alloc_frame_at(uintptr_t vaddr)
 
     return cptr;
 }
+
+bool frame_set_pin(frame_ref_t frame_ref, bool pin)
+{
+    // TODO: implement!
+}

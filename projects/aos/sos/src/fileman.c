@@ -23,7 +23,7 @@
 #include "proctable.h"
 
 #define MAX_FH  128
-#define SPECIAL_HANDLERS 1
+#define SPECIAL_HANDLERS 2
 
 // WARNING! double eval!
 #define DIV_ROUND_UP_CEXPR(n,d) \
@@ -168,15 +168,15 @@ bool fileman_init()
     specialhandlers[0].handler.gdent = null_fs_dirent;
     specialhandlers[0].handler.closedir = null_fs_closedir;
 
-    // specialhandlers[1].name = "fake";
-    // specialhandlers[1].handler.open = null_fs_open;
-    // specialhandlers[1].handler.close = null_fs_close;
-    // specialhandlers[1].handler.read = null_fs_read;
-    // specialhandlers[1].handler.write = null_fs_write;
-    // specialhandlers[1].handler.stat = fake_fs_stat;
-    // specialhandlers[1].handler.opendir = fake_fs_opendir;
-    // specialhandlers[1].handler.gdent = fake_fs_dirent;
-    // specialhandlers[1].handler.closedir = null_fs_close;
+    specialhandlers[1].name = "fake";
+    specialhandlers[1].handler.open = fake_fs_open;
+    specialhandlers[1].handler.close = null_fs_close;
+    specialhandlers[1].handler.read = fake_fs_read;
+    specialhandlers[1].handler.write = fake_fs_write;
+    specialhandlers[1].handler.stat = fake_fs_stat;
+    specialhandlers[1].handler.opendir = fake_fs_opendir;
+    specialhandlers[1].handler.gdent = fake_fs_dirent;
+    specialhandlers[1].handler.closedir = null_fs_close;
 
     return true;
 }

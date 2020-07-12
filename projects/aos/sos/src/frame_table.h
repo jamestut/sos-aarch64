@@ -156,3 +156,7 @@ seL4_ARM_Page frame_page(frame_ref_t frame_ref);
  * This should only be used for debugging.
  */
 frame_t *frame_from_ref(frame_ref_t frame_ref);
+
+// pin/unpin the frame.
+// returns the previous pinning status.
+bool frame_set_pin(frame_ref_t frame_ref, bool pin);
