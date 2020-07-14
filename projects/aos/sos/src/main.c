@@ -225,6 +225,7 @@ void handle_fault(seL4_Word badge, seL4_MessageInfo_t message, seL4_CPtr reply)
 {
     seL4_Fault_tag_t fault = seL4_MessageInfo_get_label(message);
     char msgbuff[32];
+    snprintf(msgbuff, sizeof(msgbuff)-1, "thrd_badge_%lu", badge);
 
     bool resume = false;
 
@@ -245,14 +246,13 @@ void handle_fault(seL4_Word badge, seL4_MessageInfo_t message, seL4_CPtr reply)
                         resume = true;
                     break;
                 default:
-                    snprintf(msgbuff, sizeof(msgbuff)-1, "proc_%lu", badge);
                     debug_print_fault(message, msgbuff);
                     ZF_LOGE("Fault not handled. Offending thread will be suspended indefinitely.");
                     break;
             }
         }
     } else {
-        debug_print_fault(message, "unknown_thread");
+        debug_print_fault(message, msgbuff);
         ZF_LOGE("This fault will not be handled!");
     }
 
@@ -384,6 +384,8 @@ static uintptr_t init_process_stack(seL4_Word badge, elf_t *elf_file)
     }
 
     int index = -2;
+    // FT: no pin needed. there is no other frame_data/frame_page until this 
+    // function finishes.
     void *local_stack_top = frame_data(initial_stack) + PAGE_SIZE_4K;
 
     /* null terminate the aux vectors */
@@ -710,7 +712,8 @@ NORETURN void *main_continued(UNUSED void *arg)
     start_fake_timer();
     grp01_map_bookkeep_init();
     ZF_LOGF_IF(!grp01_map_init(0, seL4_CapInitThreadVSpace), "Cannot init bookkepping for SOS frame map");
-    fake_fs_init(0x890295);
+    fake_fs_init(0xA00000);
+    frame_table_init_page_file();
 
     /* run sos initialisation tests */
     run_tests(&cspace);

@@ -55,6 +55,11 @@ inline bool userptr_single_map(uintptr_t local, pd_indices_t useridx,
 #define PD_ENTRY(pd, idx) \
     (((struct pagedir*)frame_data((pd).dir))[(idx)])
 
+#define PD_FRAME_REF(pd) ((pd).dir)
+
+#define PD_ENTRY_FR(fr, idx) \
+    (((struct pagedir*)frame_data(fr))[(idx)])
+
 PACKED struct pagedir {
     // this frame contains array of child page directories (this structure)
     frame_ref_t dir : FRAME_TABLE_BITS;
@@ -111,6 +116,8 @@ bool grp01_map_init(seL4_Word badge, seL4_CPtr vspace)
 seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_frame_on_delete, seL4_Word vaddr, seL4_CapRights_t rights,
                      seL4_ARM_VMAttributes attr)
 {
+    seL4_Error err;
+
     // we always assume that the badge passed here is valid!
     seL4_CPtr vspace = proctable[badge].vspace;
 
@@ -128,6 +135,7 @@ seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_fram
 
     // allocate shadow tables if not allocated yet for the given vaddr
     struct pagedir* ppd = &lbk->sh_pgd;
+    frame_ref_t ppd_fr;
     for(PDType pdtype=PT_PGD; pdtype>PT_PT; --pdtype) {
         if(!ppd->dir) {
             if(!(ppd->dir = alloc_empty_frame())) {
@@ -135,38 +143,47 @@ seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_fram
                 return seL4_NotEnoughMemory;
             }
         }
-        ppd = ((struct pagedir*)frame_data(ppd->dir)) + PD_INDEX(vaddr, pdtype);
+        ppd_fr = ppd->dir;
+        ppd = ((struct pagedir*)frame_data(ppd_fr)) + PD_INDEX(vaddr, pdtype);
     }
+    // pin the ppd so that we don't get evicted.
+    frame_set_pin(ppd_fr, true);
+
     // shadow PT
     // allocate frame for PT, for storing frame ref and cptr to mapped frame
     if(!ppd->dir) {
         ppd->dir = alloc_empty_frame();
         if(!ppd->dir) {
             ZF_LOGE("Cannot allocate frame for page table");
-            return seL4_NotEnoughMemory;
+            err = seL4_NotEnoughMemory;
+            goto finish2;
         }
     }
     if(!ppd->cap) {
         ppd->cap = alloc_empty_frame();
         if(!ppd->cap) {
             ZF_LOGE("Cannot allocate frame for page table");
-            return seL4_NotEnoughMemory;
+            err = seL4_NotEnoughMemory;
+            goto finish2;
         }
     }
-
-    seL4_Error err;
 
     // check if frame is already mapped to our data structure
     frame_ref_t existing_frameref = ((frame_ref_t*)frame_data(ppd->dir))[PD_INDEX(vaddr, PT_PT)];
     if(existing_frameref){
-        if(frameref)
+        if(frameref) {
             // means that caller tries to map a frame but there is another one already mapped
             // if frameref is 0, it means that caller wishes to remap
-            return seL4_DeleteFirst;
-        else {
+            err = seL4_DeleteFirst;
+            goto finish2;
+        } else {
             frameref = existing_frameref & FR_FLAG_REF_AREA;
             free_frame_on_delete = !(existing_frameref & FR_FLAG_NOERASE);
         }
+    } else if(!frameref) {
+        // we need a properly allocated frame in that case!
+        err = seL4_FailedLookup;
+        goto finish2;
     }
 
     seL4_CPtr mapped_frame;
@@ -176,53 +193,63 @@ seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_fram
         mapped_frame = cspace_alloc_slot(&cspace);
         if(mapped_frame == NULL_FRAME) {
             ZF_LOGE("Cannot allocate cspace slot to map frame");
-            return seL4_NotEnoughMemory;
+            err = seL4_NotEnoughMemory;
+            goto finish2;
         }
     } else {
         // get the existing slot. this current slot must already have the cap invalidated
         mapped_frame = ((seL4_CPtr*)frame_data(ppd->cap))[PD_INDEX(vaddr, PT_PT)];
     }
 
+    // this pinning is to avoid the page that we're mapping to get evicted.
+    // because if that happens, seL4 will obviously fail to map an empty capability
+    // and we'll left puzzled otherwise!
+    bool frameref_pin_status = frame_set_pin(frameref, true);
+
     err = cspace_copy(&cspace, mapped_frame, &cspace, frame_page(frameref), seL4_AllRights);
     if(err != seL4_NoError) {
         ZF_LOGE("Cannot copy frame capability for mapping: %d\n", err);
-        return err;
+        goto finish;
     }
 
     // try allocating for PUD/PD/PT
     err = seL4_ARM_Page_Map(mapped_frame, vspace, vaddr, rights, attr);
     
     for (size_t i = 0; i < MAPPING_SLOTS && err == seL4_FailedLookup; i++) {
+        seL4_Error sperr = seL4_NoError;
+
         /* save this so nothing else trashes the message register value */
         seL4_Word failed = seL4_MappingFailedLookupLevel();
 
         // select the container (directory) of the requested object
+        // reference to frame used by contpd. used for pinning/unpinning.
+        frame_ref_t contpd_frame;
         struct pagedir * contpd;
         PDType conttype;
         seL4_Word targetpdtype;
         switch (failed) {
         case SEL4_MAPPING_LOOKUP_NO_PT:
-            contpd = &PD_ENTRY(
+            contpd_frame = PD_FRAME_REF(
                 PD_ENTRY(
                     PD_ENTRY(
                         lbk->sh_pgd, PD_INDEX(vaddr, PT_PGD)
                     ), PD_INDEX(vaddr, PT_PUD)
-                ), PD_INDEX(vaddr, PT_PD));
+                ));
             conttype = PT_PD;
             targetpdtype = seL4_ARM_PageTableObject;
             break;
 
         case SEL4_MAPPING_LOOKUP_NO_PD:
-            contpd = &PD_ENTRY(
+            contpd_frame = PD_FRAME_REF(
                     PD_ENTRY(
                         lbk->sh_pgd, PD_INDEX(vaddr, PT_PGD)
-                    ), PD_INDEX(vaddr, PT_PUD));
+                    ));
             conttype = PT_PUD;
             targetpdtype = seL4_ARM_PageDirectoryObject;
             break;
 
         case SEL4_MAPPING_LOOKUP_NO_PUD:
-            contpd = &PD_ENTRY(lbk->sh_pgd, PD_INDEX(vaddr, PT_PGD));
+            contpd_frame = PD_FRAME_REF(lbk->sh_pgd);
             conttype = PT_PGD;
             targetpdtype = seL4_ARM_PageUpperDirectoryObject;
             break;
@@ -230,22 +257,30 @@ seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_fram
         default:
             // either we forgot to map the vspace, or something really bad happened.
             ZF_LOGE("seL4 give unknown mapping error: %ld", failed);
-            return err;
+            sperr = seL4_FailedLookup;
+            goto maploopfinish;
         }
+
+        frame_set_pin(contpd_frame, true);
+        contpd = &PD_ENTRY_FR(contpd_frame, PD_INDEX(vaddr, conttype));
 
         // allocate a new page directory frame
         if(!contpd->ut) {
-            contpd->ut = alloc_empty_frame();
+            // we don't check UT directly when unmapping, as it is always created together with the cap.
+            // Therefore, we can let this data unitialized.
+            contpd->ut = alloc_frame();
             if(!contpd->ut) {
                 ZF_LOGE("Cannot allocate frame for untyped table.");
-                return seL4_NotEnoughMemory;
+                sperr = seL4_NotEnoughMemory;
+                goto maploopfinish;
             }
         }
 
         ut_t* ut_pd = ((ut_t**)frame_data(contpd->ut))[PD_INDEX(vaddr, conttype)] = ut_alloc_4k_untyped(NULL);
         if(!ut_pd) {
             ZF_LOGE("Failed to allocate frame for hardware page directory");
-            return seL4_NotEnoughMemory;
+            sperr = seL4_NotEnoughMemory;
+            goto maploopfinish;
         }
 
         // create cspace slot for this new page table
@@ -253,36 +288,39 @@ seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_fram
             contpd->cap = alloc_empty_frame();
             if(!contpd->ut) {
                 ZF_LOGE("Cannot allocate frame for capabilities table.");
-                return seL4_NotEnoughMemory;
+                sperr = seL4_NotEnoughMemory;
+                goto maploopfinish;
             }
         }
             
-        seL4_CPtr* pd_cap = (seL4_CPtr*)frame_data(contpd->cap) + PD_INDEX(vaddr, conttype);
-        if((*pd_cap = cspace_alloc_slot(&cspace)) == seL4_CapNull) {
+        seL4_CPtr pd_cap = ((seL4_CPtr*)frame_data(contpd->cap))[PD_INDEX(vaddr, conttype)] = cspace_alloc_slot(&cspace);
+        if(pd_cap == seL4_CapNull) {
             ZF_LOGE("Failed to allocate cspace slot for page directory");
             ut_free(ut_pd);
-            return seL4_NotEnoughMemory;
+            sperr = seL4_NotEnoughMemory;
+            goto maploopfinish;
         }
 
         // retype UT to the appropriate PD type
-        err = cspace_untyped_retype(&cspace, ut_pd->cap, *pd_cap, targetpdtype, seL4_PageBits);
+        err = cspace_untyped_retype(&cspace, ut_pd->cap, pd_cap, targetpdtype, seL4_PageBits);
         if(err) {
             ZF_LOGE("Failed to retype page directory: %d", err);
-            cspace_free_slot(&cspace, *pd_cap);
+            cspace_free_slot(&cspace, pd_cap);
             ut_free(ut_pd);
-            return err;
+            sperr = err;
+            goto maploopfinish;
         }
 
         // map the PD to seL4
         switch(targetpdtype) {
             case seL4_ARM_PageUpperDirectoryObject:
-                err = seL4_ARM_PageUpperDirectory_Map(*pd_cap, vspace, vaddr, seL4_ARM_Default_VMAttributes);
+                err = seL4_ARM_PageUpperDirectory_Map(pd_cap, vspace, vaddr, seL4_ARM_Default_VMAttributes);
                 break;
             case seL4_ARM_PageDirectoryObject:
-                err = seL4_ARM_PageDirectory_Map(*pd_cap, vspace, vaddr, seL4_ARM_Default_VMAttributes);
+                err = seL4_ARM_PageDirectory_Map(pd_cap, vspace, vaddr, seL4_ARM_Default_VMAttributes);
                 break;
             case seL4_ARM_PageTableObject:
-                err = seL4_ARM_PageTable_Map(*pd_cap, vspace, vaddr, seL4_ARM_Default_VMAttributes);
+                err = seL4_ARM_PageTable_Map(pd_cap, vspace, vaddr, seL4_ARM_Default_VMAttributes);
                 break;
             default:
                 ZF_LOGF("Got unforeseen type.");
@@ -290,11 +328,19 @@ seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_fram
 
         if(err) {
             ZF_LOGE("Cannot map page directory.");
-            return err;
+            sperr = err;
+            goto maploopfinish;
         }
 
         // try mapping again
         err = seL4_ARM_Page_Map(mapped_frame, vspace, vaddr, rights, attr);
+
+    maploopfinish:
+        frame_set_pin(contpd_frame, false);
+        if(sperr) {
+            err = sperr;
+            goto finish;
+        }
     }
 
     // if err here is noerr, it means that we've mapped the frame successfully
@@ -311,6 +357,10 @@ seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_fram
             free_frame(frameref);
     }
 
+finish:
+    frame_set_pin(frameref, frameref_pin_status);
+finish2:
+    frame_set_pin(ppd_fr, false);
     return err;
 }
 
@@ -344,21 +394,27 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_Word vaddrbegin, seL4_Word va
     for(int i = PT_PT; i <= PT_PGD; ++i)
         indices[i] = PD_INDEX(vaddrbegin, i);
     
+    frame_ref_t pud_fr, pd_fr, pt_fr;
     struct pagedir pud, pd, pt;
     frame_ref_t* fr;
     seL4_CPtr* frcap;
 
+    frame_set_pin(lbk->sh_pgd.dir, true);
     while(numpages) { // PGD
         ZF_LOGF_IF(indices[PT_PGD] >= 512, "vaddr out of bound");
         pud = PD_ENTRY(lbk->sh_pgd, indices[PT_PGD]);
         if(pud.dir) {
+            frame_set_pin(pud.dir, true);
             while(numpages) { // PUD
                 pd = PD_ENTRY(pud, indices[PT_PUD]);
                 if(pd.dir) {
+                    frame_set_pin(pd.dir, true);
                     while(numpages) { // PD
                         pt = PD_ENTRY(pd, indices[PT_PD]);
                         if(pt.dir) {
                             ZF_LOGF_IF(!pt.cap, "Page table has frame table but no capability table");
+                            frame_set_pin(pt.dir, true);
+                            frame_set_pin(pt.cap, true);
                             while(numpages) { // PT
                                 fr = ((frame_ref_t*)frame_data(pt.dir)) + indices[PT_PT];
                                 if(*fr) {
@@ -382,6 +438,8 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_Word vaddrbegin, seL4_Word va
                                     break;
                                 }
                             }
+                            frame_set_pin(pt.dir, false);
+                            frame_set_pin(pt.cap, false);
                             if(full) {
                                 // free this PT's frame data
                                 free_frame(pt.dir);
@@ -389,12 +447,13 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_Word vaddrbegin, seL4_Word va
                                 // unmap this PT and free the UT
                                 if(pd.cap) {
                                     ZF_LOGF_IF(!pd.ut, "shadow PD has cap frame but no ut frame.");
-                                    seL4_CPtr ptcap = ((seL4_CPtr*)frame_data(pd.cap))[indices[PT_PD]];
-                                    if(ptcap) {
-                                        ZF_LOGF_IF(seL4_ARM_PageTable_Unmap(ptcap) != seL4_NoError, 
+                                    seL4_CPtr* ptcap = &((seL4_CPtr*)frame_data(pd.cap))[indices[PT_PD]];
+                                    if(*ptcap) {
+                                        ZF_LOGF_IF(seL4_ARM_PageTable_Unmap(*ptcap) != seL4_NoError, 
                                             "Error unmapping PT");
-                                        cspace_delete(&cspace, ptcap);
-                                        cspace_free_slot(&cspace, ptcap);
+                                        cspace_delete(&cspace, *ptcap);
+                                        cspace_free_slot(&cspace, *ptcap);
+                                        *ptcap = 0;
                                         ut_free(((ut_t**)frame_data(pd.ut))[indices[PT_PD]]);
                                     }
                                 }
@@ -408,6 +467,7 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_Word vaddrbegin, seL4_Word va
                             break;
                         }
                     }
+                    frame_set_pin(pd.dir, false);
                     if(full) {
                         // free this PD's frame data
                         free_frame(pd.dir);
@@ -418,12 +478,13 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_Word vaddrbegin, seL4_Word va
                         // unmap this PD and free the UT
                         if(pud.cap) {
                             ZF_LOGF_IF(!pud.ut, "shadow PUD has cap frame but no ut frame.");
-                            seL4_CPtr pdcap = ((seL4_CPtr*)frame_data(pud.cap))[indices[PT_PUD]];
-                            if(pdcap) {
-                                ZF_LOGF_IF(seL4_ARM_PageDirectory_Unmap(pdcap) != seL4_NoError, 
+                            seL4_CPtr* pdcap = &((seL4_CPtr*)frame_data(pud.cap))[indices[PT_PUD]];
+                            if(*pdcap) {
+                                ZF_LOGF_IF(seL4_ARM_PageDirectory_Unmap(*pdcap) != seL4_NoError, 
                                     "Error unmapping PD");
-                                cspace_delete(&cspace, pdcap);
-                                cspace_free_slot(&cspace, pdcap);
+                                cspace_delete(&cspace, *pdcap);
+                                cspace_free_slot(&cspace, *pdcap);
+                                *pdcap = 0;
                                 ut_free(((ut_t**)frame_data(pud.ut))[indices[PT_PUD]]);
                             }
                         }
@@ -438,6 +499,7 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_Word vaddrbegin, seL4_Word va
                     break;
                 }
             }
+            frame_set_pin(pud.dir, false);
             if(full) {
                 // free this PUD's frame data
                 free_frame(pud.dir);
@@ -448,12 +510,13 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_Word vaddrbegin, seL4_Word va
                 // unmap this PD and free the UT
                 if(lbk->sh_pgd.cap) {
                     ZF_LOGF_IF(!lbk->sh_pgd.ut, "shadow PGD has cap frame but no ut frame.");
-                    seL4_CPtr pudcap = ((seL4_CPtr*)frame_data(lbk->sh_pgd.cap))[indices[PT_PGD]];
-                    if(pudcap) {
-                        ZF_LOGF_IF(seL4_ARM_PageUpperDirectory_Unmap(pudcap) != seL4_NoError, 
+                    seL4_CPtr* pudcap = ((seL4_CPtr*)frame_data(lbk->sh_pgd.cap))[indices[PT_PGD]];
+                    if(*pudcap) {
+                        ZF_LOGF_IF(seL4_ARM_PageUpperDirectory_Unmap(*pudcap) != seL4_NoError, 
                             "Error unmapping PUD");
-                        cspace_delete(&cspace, pudcap);
-                        cspace_free_slot(&cspace, pudcap);
+                        cspace_delete(&cspace, *pudcap);
+                        cspace_free_slot(&cspace, *pudcap);
+                        *pudcap = 0;
                         ut_free(((ut_t**)frame_data(lbk->sh_pgd.ut))[indices[PT_PGD]]);
                     }
                 }
@@ -466,6 +529,7 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_Word vaddrbegin, seL4_Word va
         }
         ++indices[PT_PGD];
     }
+    frame_set_pin(lbk->sh_pgd.dir, false);
 
     // free the PGD and unmap it
     // (however, let the caller unmap the PGD and free its cspace instead)

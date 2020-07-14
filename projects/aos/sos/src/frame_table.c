@@ -169,6 +169,12 @@ void frame_table_init(cspace_t *cspace, seL4_CPtr vspace)
     frame_table.vspace = vspace;
 }
 
+void frame_table_init_page_file()
+{
+    page_file.fh = *find_handler("fake");
+    page_file.id = page_file.fh.open(0, "fake", 7);
+}
+
 cspace_t *frame_table_cspace(void)
 {
     return frame_table.cspace;
@@ -242,7 +248,6 @@ static size_t frame_mem_page_idx(frame_ref_t frame_ref)
         pageidx = get_new_phy_frame();
         if(!pageidx) {
             ZF_LOGE("Failed to obtain a frame. Memory full!");
-            frame->pinned = false;
             return 0;
         } else {
             if(frame->reqempty) {
@@ -363,7 +368,7 @@ static size_t get_new_phy_frame()
     #ifdef CONFIG_SOS_FRAME_LIMIT
     if (CONFIG_SOS_FRAME_LIMIT != 0ul) {
         if(free_slot >= CONFIG_SOS_FRAME_LIMIT) {
-            ZF_LOGE("Configured frame limit exceeded.");
+            ZF_LOGI("Configured frame limit exceeded.");
             free_slot = -1;
         }
     }
@@ -376,7 +381,7 @@ static size_t get_new_phy_frame()
         if(!pagecap->cap) {
             pagecap->cap = alloc_frame_at((uintptr_t)frame_table.frame_data[free_slot]);
             if(!pagecap->cap) {
-                ZF_LOGE("Failed to allocate new page capability.");
+                ZF_LOGE("Failed to allocate new page to store capability.");
                 return 0;
             }
         }
@@ -642,6 +647,7 @@ bool page_out_frame(frame_ref_t frame_ref)
 {
     if(!page_file.id) {
         ZF_LOGE("Request page out, but page file is not ready.");
+        return false;
     }
 
     frame_t* fr = frame_from_ref(frame_ref);
@@ -673,7 +679,8 @@ bool page_out_frame(frame_ref_t frame_ref)
                     assert(GET_BMP(frame_table.pf_bmp, 0));
                 }
                 frame_table.pf_bmp_count += PAGE_SIZE_4K / sizeof(uint64_t);
-            }
+            } else
+                break;
         }
         // page out frame to file
         ssize_t wrres = page_file.fh.write(0, page_file.id, frame_table.frame_data[fr->back_idx], 
@@ -685,6 +692,9 @@ bool page_out_frame(frame_ref_t frame_ref)
         // write OK. now mark the memory frame as free
         assert(GET_FRAME_CAP_STATUS(fr->back_idx));
         TOGGLE_FRAME_CAP_FREE(fr->back_idx);
+        // and mark the page file area as used
+        assert(!GET_BMP(frame_table.pf_bmp, free_slot));
+        TOGGLE_BMP(frame_table.pf_bmp, free_slot);
 
         // invalidate the frame so that all derived caps are removed, and maps are unmapped
         cspace_revoke(frame_table.cspace, FRAME_PAGE_CAP(fr->back_idx).cap);

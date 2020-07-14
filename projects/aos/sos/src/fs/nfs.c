@@ -275,7 +275,6 @@ void cb_generic(int status, struct nfs_context *nfs, void *data, void *private_d
                 param->data.nfsdir = data;
                 break;
             default:
-                // DEBUG. remove assert after finished!
                 ZF_LOGF("NFS command not implemented!");
         }
     }

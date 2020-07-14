@@ -117,6 +117,7 @@ static int load_segment_into_vspace(seL4_Word badge, seL4_CPtr loadee, char *src
         }
 
         /* finally copy the data */
+        // FT: no pin needed.
         unsigned char *loader_data = frame_data(frame);
 
         /* Write any zeroes at the start of the block. */

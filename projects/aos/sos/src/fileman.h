@@ -69,6 +69,9 @@ int fileman_create(seL4_Word pid);
 // free the file table of given pid.
 void fileman_destroy(seL4_Word pid);
 
+// get the handler functions appropriate for the file name
+struct filehandler* find_handler(const char* fn);
+
 // open a file handle.
 // @return negative errno if failed, 0 if pending.
 //         Result will be replied directly to the client once finishes,
