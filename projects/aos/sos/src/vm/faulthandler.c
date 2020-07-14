@@ -43,23 +43,25 @@ bool vm_fault(seL4_MessageInfo_t* tag, seL4_Word badge)
         return false;
     }
 
-    // else, it should be a valid translation
-    frame_ref_t frame = alloc_frame();
-    if(!frame) {
-        ZF_LOGE("Cannot allocate a frame.");
-        return false;
-    }
-    // zero out the frame
-    memset(frame_data(frame), 0, PAGE_SIZE_4K);
-
     seL4_Error err;
-
-    // and map it!
-    err = grp01_map_frame(badge, frame, true, ROUND_DOWN(faultaddr, PAGE_SIZE_4K), as->perm, seL4_ARM_Default_VMAttributes);
+    
+    // first, try remapping the page. parameter frame_ref of 0 will trigger remapping.
+    err = grp01_map_frame(badge, 0, true, ROUND_DOWN(faultaddr, PAGE_SIZE_4K), as->perm, seL4_ARM_Default_VMAttributes);
     if(err != seL4_NoError) {
-        ZF_LOGE("Error mapping frame to target vaddr: %d", err);
-        return false;
-    }
+        // need to allocate a new frame
+        frame_ref_t frame = alloc_empty_frame();
+        if(!frame) {
+            ZF_LOGE("Cannot allocate a frame.");
+            return false;
+        }
 
+        // and map it!
+        err = grp01_map_frame(badge, frame, true, ROUND_DOWN(faultaddr, PAGE_SIZE_4K), as->perm, seL4_ARM_Default_VMAttributes);
+        if(err != seL4_NoError) {
+            ZF_LOGE("Error mapping frame to target vaddr: %d", err);
+            free_frame(frame);
+            return false;
+        }
+    }
     return true;
 }

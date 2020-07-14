@@ -256,7 +256,7 @@ void handle_fault(seL4_Word badge, seL4_MessageInfo_t message, seL4_CPtr reply)
         ZF_LOGE("This fault will not be handled!");
     }
 
-    // TODO: if resume is false, we should probably kill the offending process
+    // TODO: GRP01 if resume is false, we should probably kill the offending process
     // since we reuse the reply object for serving another thread, practically
     // this thread will be suspended indefinitely (zombie?)
     if(resume) {
@@ -272,7 +272,6 @@ void handle_fault(seL4_Word badge, seL4_MessageInfo_t message, seL4_CPtr reply)
 #define REPLY_OBJ_EMPTY (prodpos == conspos)
 NORETURN void syscall_loop(seL4_CPtr ep)
 {
-    // TODO: check if this is in global instead of stack
     static seL4_CPtr replyobjs[REPLY_OBJ_COUNT];
     memset(replyobjs, 0, sizeof(replyobjs));
 

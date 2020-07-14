@@ -16,7 +16,6 @@
 #include <sel4/sel4_arch/mapping.h>
 
 #define BK_BUCKETS 4
-#define FRAME_TABLE_BITS 19
 #define FR_FLAG_AREA     0xFF00000000000000ULL
 #define FR_FLAG_REF_AREA (~FR_FLAG_AREA)
 
@@ -158,16 +157,32 @@ seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_fram
     seL4_Error err;
 
     // check if frame is already mapped to our data structure
-    if(((frame_ref_t*)frame_data(ppd->dir))[PD_INDEX(vaddr, PT_PT)]) 
-        return seL4_DeleteFirst;
-
-    // copy the frame cap so that we can map it to target vspace
-    // because frame table is already mapping the frame
-    seL4_CPtr mapped_frame = cspace_alloc_slot(&cspace);
-    if(mapped_frame == NULL_FRAME) {
-        ZF_LOGE("Cannot allocate cspace slot to map frame");
-        return seL4_NotEnoughMemory;
+    frame_ref_t existing_frameref = ((frame_ref_t*)frame_data(ppd->dir))[PD_INDEX(vaddr, PT_PT)];
+    if(existing_frameref){
+        if(frameref)
+            // means that caller tries to map a frame but there is another one already mapped
+            // if frameref is 0, it means that caller wishes to remap
+            return seL4_DeleteFirst;
+        else {
+            frameref = existing_frameref & FR_FLAG_REF_AREA;
+            free_frame_on_delete = !(existing_frameref & FR_FLAG_NOERASE);
+        }
     }
+
+    seL4_CPtr mapped_frame;
+    if(!existing_frameref) {
+        // copy the frame cap so that we can map it to target vspace
+        // because frame table is already mapping the frame
+        mapped_frame = cspace_alloc_slot(&cspace);
+        if(mapped_frame == NULL_FRAME) {
+            ZF_LOGE("Cannot allocate cspace slot to map frame");
+            return seL4_NotEnoughMemory;
+        }
+    } else {
+        // get the existing slot. this current slot must already have the cap invalidated
+        mapped_frame = ((seL4_CPtr*)frame_data(ppd->cap))[PD_INDEX(vaddr, PT_PT)];
+    }
+
     err = cspace_copy(&cspace, mapped_frame, &cspace, frame_page(frameref), seL4_AllRights);
     if(err != seL4_NoError) {
         ZF_LOGE("Cannot copy frame capability for mapping: %d\n", err);

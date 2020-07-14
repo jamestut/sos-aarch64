@@ -20,7 +20,6 @@ void start_fake_timer()
 
 void timer_ticker(void* unused)
 {
-    // TODO: GRP01 - messes with IPC. fix.
     while(1) {
         for(int i=0; i<10; ++i)
             seL4_Yield();
