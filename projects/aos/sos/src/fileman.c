@@ -31,18 +31,6 @@
 
 // struct declaration area
 
-struct filehandler
-{
-    file_open_fn open;
-    file_rw_fn read;
-    file_rw_fn write;
-    file_stat_fn stat;
-    file_opendir_fn opendir;
-    file_dirent_fn gdent;
-    file_closedir_fn closedir;
-    file_close_fn close;
-};
-
 struct fileentry
 {
     bool used;

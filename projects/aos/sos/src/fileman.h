@@ -44,6 +44,18 @@ typedef void (*file_closedir_fn)(seL4_Word pid, ssize_t id);
 // @param id whatever returned by file_open_fn
 typedef void (*file_close_fn)(seL4_Word pid, ssize_t id);
 
+struct filehandler
+{
+    file_open_fn open;
+    file_rw_fn read;
+    file_rw_fn write;
+    file_stat_fn stat;
+    file_opendir_fn opendir;
+    file_dirent_fn gdent;
+    file_closedir_fn closedir;
+    file_close_fn close;
+};
+
 // initialize file table manager.
 // call once when SOS is starting up.
 // @param p_cspace pointer to cspace shared with eventloop handler.

@@ -29,7 +29,7 @@ ssize_t fake_fs_rw(seL4_Word pid, ssize_t id, void* ptr, off_t offset, size_t le
 void fake_fs_init(size_t capacity)
 {
     pagecount = DIV_ROUND_UP(capacity, PAGE_SIZE_4K);
-    printf("Initializing in-memory fake file with maximum capacity of %llu pages (%llu bytes) ...\n", pagecount * PAGE_SIZE_4K, pagecount);
+    printf("Initializing in-memory fake file with maximum capacity of %llu pages (%llu bytes) ...\n", pagecount, pagecount * PAGE_SIZE_4K);
 
     // mutex for locking
     mtx_ut = alloc_retype(&mtx, seL4_NotificationObject, seL4_NotificationBits);
@@ -52,7 +52,7 @@ void fake_fs_init(size_t capacity)
             // error. dealloc
             ZF_LOGE("Failed to allocate frame for fake file system");
             for(size_t j = 0; j < i; ++j)
-                free_frame(frames[i]);
+                free_frame(frames[j]);
             goto error_03;
         }
         frame_set_pin(frames[i], true);

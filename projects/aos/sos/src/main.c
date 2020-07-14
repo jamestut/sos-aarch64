@@ -85,7 +85,7 @@
 #define IRQ_EP_BADGE         BIT(seL4_BadgeBits - 1ul)
 #define IRQ_IDENT_BADGE_BITS MASK(seL4_BadgeBits - 1ul)
 
-#define TTY_NAME             "sosh"
+#define TTY_NAME             "tty_test"
 #define TTY_PRIORITY         (0)
 #define TTY_EP_BADGE         (101)
 
@@ -471,11 +471,8 @@ bool start_first_process(char *app_name, seL4_CPtr ep)
         ZF_LOGE("Failed to alloc ipc buffer frame");
         return false;
     }
-    // create 2nd IPC buffer for passing large data
-    pt->ipc_buffer2_frame = alloc_frame();
-    if(pt->ipc_buffer2_frame == 0) {
-        ZF_LOGE("Failed to alloc large ipc buffer");
-    }
+    // avoid the TCB buffer to get paged out!
+    frame_set_pin(pt->ipc_buffer_frame, true);
     
     /* allocate a new slot in the target cspace which we will mint a badged endpoint cap into --
      * the badge is used to identify the process, which will come in handy when you have multiple
@@ -501,9 +498,8 @@ bool start_first_process(char *app_name, seL4_CPtr ep)
     }
 
     /* Configure the TCB */
-    // TODO: GRP01: if not working, copy cap to tty_test's cspace!
-    // GRP01: test
     seL4_CPtr pipcb = cspace_alloc_slot(&cspace);
+    // copy buffer page and map it to child app
     err = cspace_copy(&cspace, pipcb, frame_table_cspace(), frame_page(pt->ipc_buffer_frame), seL4_AllRights);
     err = seL4_TCB_Configure(pt->tcb,
                              pt->cspace.root_cnode, seL4_NilData,
@@ -587,14 +583,6 @@ bool start_first_process(char *app_name, seL4_CPtr ep)
                     seL4_AllRights, seL4_ARM_Default_VMAttributes);
     if (err != 0) {
         ZF_LOGE("Unable to map IPC buffer for user app");
-        return false;
-    }
-
-    // extra page for large data that has to be passed thru IPC
-    err = grp01_map_frame(TTY_EP_BADGE, pt->ipc_buffer2_frame, true, PROCESS_IPC_BUFFER + PAGE_SIZE_4K,
-                    seL4_AllRights, seL4_ARM_Default_VMAttributes);
-    if (err != 0) {
-        ZF_LOGE("Unable to map larger IPC buffer for user app");
         return false;
     }
 
@@ -724,8 +712,6 @@ NORETURN void *main_continued(UNUSED void *arg)
     grp01_map_bookkeep_init();
     ZF_LOGF_IF(!grp01_map_init(0, seL4_CapInitThreadVSpace), "Cannot init bookkepping for SOS frame map");
     fake_fs_init(0x890295);
-
-    
 
     /* run sos initialisation tests */
     run_tests(&cspace);
