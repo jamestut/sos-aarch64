@@ -37,13 +37,14 @@ typedef struct ut ut_t;
 PACKED struct ut {
     /* The capability space of the initial task is small (~20 bits) so
      * we can use the remaining bits to store other information */
-    seL4_Untyped cap : 23;
+    seL4_Untyped cap : INITIAL_TASK_CSPACE_BITS;
     unsigned long valid : 1;
     unsigned long size_bits : 4;
     unsigned long unused : 36;
     ut_t *next; // pointer to next item in list
 };
-compile_time_assert("Small cspace bits", INITIAL_TASK_CSPACE_BITS == 23);
+// just to make sure
+compile_time_assert(ut size, sizeof(ut_t) == sizeof(size_t)*2);
 
 /* list of valid object sizes we can allocate */
 #define N_UNTYPED_LISTS (seL4_PageBits - seL4_EndpointBits + 1)

@@ -21,8 +21,6 @@ typedef struct {
 
     frame_ref_t ipc_buffer_frame;
 
-    frame_ref_t ipc_buffer2_frame;
-    
     ut_t *sched_context_ut;
     seL4_CPtr sched_context;
 
