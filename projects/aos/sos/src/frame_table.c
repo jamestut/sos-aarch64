@@ -13,6 +13,7 @@
 #include "mapping.h"
 #include "vmem_layout.h"
 #include "fileman.h"
+#include "threadassert.h"
 
 #include <assert.h>
 #include <string.h>
@@ -167,12 +168,19 @@ void frame_table_init(cspace_t *cspace, seL4_CPtr vspace)
 {
     frame_table.cspace = cspace;
     frame_table.vspace = vspace;
+
+    #ifdef CONFIG_SOS_FRAME_LIMIT
+    if(CONFIG_SOS_FRAME_LIMIT)
+        printf("Configured frame limit: %llu frames\n", CONFIG_SOS_FRAME_LIMIT);
+    #endif
 }
 
 void frame_table_init_page_file()
 {
-    page_file.fh = *find_handler("fake");
-    page_file.id = page_file.fh.open(0, "fake", 7);
+    // page_file.fh = *find_handler("fake");
+    // page_file.id = page_file.fh.open(0, "fake", 7);
+    page_file.fh = *find_handler("pf");
+    page_file.id = page_file.fh.open(0, "pf", 7);
 }
 
 cspace_t *frame_table_cspace(void)
@@ -182,6 +190,8 @@ cspace_t *frame_table_cspace(void)
 
 frame_ref_t alloc_frame(void)
 {
+    assert_main_thread();
+
     frame_t *frame = pop_front(&frame_table.free);
 
     if (frame == NULL) {
@@ -206,6 +216,8 @@ frame_ref_t alloc_empty_frame(void)
 
 void free_frame(frame_ref_t frame_ref)
 {
+    assert_main_thread();
+
     if (frame_ref != NULL_FRAME) {
         frame_t *frame = frame_from_ref(frame_ref);
         if(frame->backed) {
@@ -240,6 +252,8 @@ void free_frame(frame_ref_t frame_ref)
 
 static size_t frame_mem_page_idx(frame_ref_t frame_ref)
 {
+    assert_main_thread();
+
     frame_t *frame = frame_from_ref(frame_ref);
     size_t pageidx;
     if(frame->backed && !frame->paged) {

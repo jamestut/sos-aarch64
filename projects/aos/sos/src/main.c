@@ -113,6 +113,9 @@ sync_mutex_t scratch_lock;
 static seL4_CPtr sched_ctrl_start;
 static seL4_CPtr sched_ctrl_end;
 
+// for debugging
+uintptr_t main_ipc_buff;
+
 bool handle_syscall(seL4_Word badge, seL4_Word msglen, seL4_CPtr reply)
 {
 
@@ -686,6 +689,7 @@ void scratchas_init(void)
 
 NORETURN void *main_continued(UNUSED void *arg)
 {
+    main_ipc_buff = seL4_GetIPCBuffer();
     /* Initialise other system compenents here */
     seL4_CPtr ipc_ep, ntfn;
     sos_ipc_init(&ipc_ep, &ntfn);
@@ -712,8 +716,7 @@ NORETURN void *main_continued(UNUSED void *arg)
     start_fake_timer();
     grp01_map_bookkeep_init();
     ZF_LOGF_IF(!grp01_map_init(0, seL4_CapInitThreadVSpace), "Cannot init bookkepping for SOS frame map");
-    fake_fs_init(0xA00000);
-    frame_table_init_page_file();
+    //fake_fs_init(0xA00000);
 
     /* run sos initialisation tests */
     run_tests(&cspace);
@@ -738,6 +741,7 @@ NORETURN void *main_continued(UNUSED void *arg)
     // init file systems
     console_fs_init();
     grp01_nfs_init();
+    frame_table_init_page_file();
 
     /* Start the user application */
     printf("Start first process\n");
