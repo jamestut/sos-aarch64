@@ -365,7 +365,7 @@ finish:
 finish2:
     frame_set_pin(ppd_fr, false);
 finish3:
-    if(unpin_on_unmap)
+    if(unpin_on_unmap && err)
         frame_set_pin(frameref, false);
     return err;
 }
