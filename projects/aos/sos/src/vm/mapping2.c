@@ -56,11 +56,6 @@ inline bool userptr_single_map(uintptr_t local, pd_indices_t useridx,
 #define PD_ENTRY(pd, idx) \
     (((struct pagedir*)frame_data((pd).dir))[(idx)])
 
-#define PD_FRAME_REF(pd) ((pd).dir)
-
-#define PD_ENTRY_FR(fr, idx) \
-    (((struct pagedir*)frame_data(fr))[(idx)])
-
 PACKED struct pagedir {
     // this frame contains array of child page directories (this structure)
     frame_ref_t dir : FRAME_TABLE_BITS;
@@ -119,6 +114,13 @@ seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_fram
 {
     seL4_Error err;
 
+    // used to convert and checkf frame_data, whether we get a frame or not.
+    union {
+        frame_ref_t* fr;
+        ut_t** ut;
+        seL4_CPtr* cap;
+    } tmp;
+
     // we always assume that the badge passed here is valid!
     seL4_CPtr vspace = proctable[badge].vspace;
 
@@ -171,7 +173,12 @@ seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_fram
     }
 
     // check if frame is already mapped to our data structure
-    frame_ref_t existing_frameref = ((frame_ref_t*)frame_data(ppd->dir))[PD_INDEX(vaddr, PT_PT)];
+    tmp.fr = ((frame_ref_t*)frame_data(ppd->dir));
+    if(!tmp.fr) {
+        err = seL4_NotEnoughMemory;
+        goto finish2;
+    }
+    frame_ref_t existing_frameref = tmp.fr[PD_INDEX(vaddr, PT_PT)];
     if(existing_frameref){
         if(frameref) {
             // means that caller tries to map a frame but there is another one already mapped
@@ -200,7 +207,12 @@ seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_fram
         }
     } else {
         // get the existing slot. this current slot must already have the cap invalidated
-        mapped_frame = ((seL4_CPtr*)frame_data(ppd->cap))[PD_INDEX(vaddr, PT_PT)];
+        tmp.cap = ((seL4_CPtr*)frame_data(ppd->cap));
+        if(!tmp.cap) {
+            err = seL4_NotEnoughMemory;
+            goto finish2;
+        }
+        mapped_frame = tmp.cap[PD_INDEX(vaddr, PT_PT)];
     }
 
     // this pinning is to avoid the page that we're mapping to get evicted.
@@ -210,8 +222,9 @@ seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_fram
 
     err = cspace_copy(&cspace, mapped_frame, &cspace, frame_page(frameref), seL4_AllRights);
     if(err != seL4_NoError) {
+        cspace_free_slot(&cspace, mapped_frame);
         ZF_LOGE("Cannot copy frame capability for mapping: %d\n", err);
-        goto finish;
+        goto finish4;
     }
 
     // try allocating for PUD/PD/PT
@@ -231,27 +244,34 @@ seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_fram
         seL4_Word targetpdtype;
         switch (failed) {
         case SEL4_MAPPING_LOOKUP_NO_PT:
-            contpd_frame = PD_FRAME_REF(
-                PD_ENTRY(
-                    PD_ENTRY(
-                        lbk->sh_pgd, PD_INDEX(vaddr, PT_PGD)
-                    ), PD_INDEX(vaddr, PT_PUD)
-                ));
+            contpd = frame_data(lbk->sh_pgd.dir);
+            if(!contpd) {
+                sperr = seL4_NotEnoughMemory;
+                goto maploopfinish;
+            }
+            contpd = frame_data(contpd[PD_INDEX(vaddr, PT_PGD)].dir);
+            if(!contpd) {
+                sperr = seL4_NotEnoughMemory;
+                goto maploopfinish;
+            }
+            contpd_frame = contpd[PD_INDEX(vaddr, PT_PUD)].dir;
             conttype = PT_PD;
             targetpdtype = seL4_ARM_PageTableObject;
             break;
 
         case SEL4_MAPPING_LOOKUP_NO_PD:
-            contpd_frame = PD_FRAME_REF(
-                    PD_ENTRY(
-                        lbk->sh_pgd, PD_INDEX(vaddr, PT_PGD)
-                    ));
+            contpd = frame_data(lbk->sh_pgd.dir);
+            if(!contpd) {
+                sperr = seL4_NotEnoughMemory;
+                goto maploopfinish;
+            }
+            contpd_frame = contpd[PD_INDEX(vaddr, PT_PGD)].dir;
             conttype = PT_PUD;
             targetpdtype = seL4_ARM_PageDirectoryObject;
             break;
 
         case SEL4_MAPPING_LOOKUP_NO_PUD:
-            contpd_frame = PD_FRAME_REF(lbk->sh_pgd);
+            contpd_frame = lbk->sh_pgd.dir;
             conttype = PT_PGD;
             targetpdtype = seL4_ARM_PageUpperDirectoryObject;
             break;
@@ -264,7 +284,12 @@ seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_fram
         }
 
         frame_set_pin(contpd_frame, true);
-        contpd = &PD_ENTRY_FR(contpd_frame, PD_INDEX(vaddr, conttype));
+        contpd = frame_data(contpd_frame);
+        if(!contpd) {
+            sperr = seL4_NotEnoughMemory;
+            goto maploopfinish;
+        }
+        contpd = contpd + PD_INDEX(vaddr, conttype);
 
         // allocate a new page directory frame
         if(!contpd->ut) {
@@ -278,7 +303,12 @@ seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_fram
             }
         }
 
-        ut_t* ut_pd = ((ut_t**)frame_data(contpd->ut))[PD_INDEX(vaddr, conttype)] = ut_alloc_4k_untyped(NULL);
+        ut_t** ut_pd_ptr = ((ut_t**)frame_data(contpd->ut));
+        if(!ut_pd_ptr) {
+            sperr = seL4_NotEnoughMemory;
+            goto maploopfinish;
+        }
+        ut_t* ut_pd = ut_pd_ptr[PD_INDEX(vaddr, conttype)] = ut_alloc_4k_untyped(NULL);
         if(!ut_pd) {
             ZF_LOGE("Failed to allocate frame for hardware page directory");
             sperr = seL4_NotEnoughMemory;
@@ -294,8 +324,13 @@ seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_fram
                 goto maploopfinish;
             }
         }
-            
-        seL4_CPtr pd_cap = ((seL4_CPtr*)frame_data(contpd->cap))[PD_INDEX(vaddr, conttype)] = cspace_alloc_slot(&cspace);
+        
+        seL4_CPtr* pd_cap_ptr = ((seL4_CPtr*)frame_data(contpd->cap));
+        if(!pd_cap_ptr) {
+            sperr = seL4_NotEnoughMemory;
+            goto maploopfinish;
+        }
+        seL4_CPtr pd_cap = pd_cap_ptr[PD_INDEX(vaddr, conttype)] = cspace_alloc_slot(&cspace);
         if(pd_cap == seL4_CapNull) {
             ZF_LOGE("Failed to allocate cspace slot for page directory");
             ut_free(ut_pd);
@@ -348,19 +383,31 @@ seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_fram
     // if err here is noerr, it means that we've mapped the frame successfully
     if(err == seL4_NoError) {
         // take note the frame to PT
-        ((frame_ref_t*)frame_data(ppd->dir))[PD_INDEX(vaddr, PT_PT)] = frameref 
+        tmp.fr = ((frame_ref_t*)frame_data(ppd->dir));
+        if(!tmp.fr) {
+            err = seL4_NotEnoughMemory;
+            goto finish;
+        }
+        tmp.fr[PD_INDEX(vaddr, PT_PT)] = frameref 
             | (free_frame_on_delete ? 0 : FR_FLAG_NOERASE)
             | (unpin_on_unmap ? FR_FLAG_UNPIN_UNMAP : 0);
-        ((seL4_CPtr*)frame_data(ppd->cap))[PD_INDEX(vaddr, PT_PT)] = mapped_frame;
-    } else {
+        tmp.cap = ((seL4_CPtr*)frame_data(ppd->cap));
+        if(!tmp.cap) {
+            err = seL4_NotEnoughMemory;
+            goto finish;
+        }
+        tmp.cap[PD_INDEX(vaddr, PT_PT)] = mapped_frame;
+    }
+
+finish:
+    if(err != seL4_NoError) {
         // free up the frames that we've allocated
         cspace_delete(&cspace, mapped_frame);
         cspace_free_slot(&cspace, mapped_frame);
         if(free_frame_on_delete)
             free_frame(frameref);
     }
-
-finish:
+finish4:
     frame_set_pin(frameref, frameref_pin_status);
 finish2:
     frame_set_pin(ppd_fr, false);
@@ -404,6 +451,9 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_Word vaddrbegin, seL4_Word va
     struct pagedir pud, pd, pt;
     frame_ref_t* fr;
     seL4_CPtr* frcap;
+    
+    // to check that frame_data successfully get a frame
+    struct pagedir * tmp;
 
     frame_set_pin(lbk->sh_pgd.dir, true);
     while(numpages) { // PGD
@@ -640,24 +690,47 @@ void* userptr_read(userptr_t src, size_t len, seL4_Word badge)
     frame_ref_t fr;
     uintptr_t scratchvaddr = ret;
 
+    // get the reference. check if we can map the pages.
+    struct pagedir* tmp;
+
     bool allpagesmapped = true;
     frame_set_pin(userbk->sh_pgd.dir, true);
     while(pagecount) { // PGD
         ZF_LOGF_IF(indices[PT_PGD] >= 512, "vaddr out of bound");
-        pud = PD_ENTRY(userbk->sh_pgd, indices[PT_PGD]);
+        tmp = frame_data(userbk->sh_pgd.dir);
+        if(!tmp) {
+            allpagesmapped = false;
+            break;
+        }
+        pud = tmp[indices[PT_PGD]];
         if(pud.dir) {
             frame_set_pin(pud.dir, true);
             while(pagecount) { // PUD
-                pd = PD_ENTRY(pud, indices[PT_PUD]);
+                tmp = frame_data(pud.dir);
+                if(!tmp) {
+                    allpagesmapped = false;
+                    break;
+                }
+                pd = tmp[indices[PT_PUD]];
                 if(pd.dir) {
                     frame_set_pin(pd.dir, true);
                     while(pagecount) { // PD
-                        pt = PD_ENTRY(pd, indices[PT_PD]);
+                        tmp = frame_data(pd.dir);
+                        if(!tmp) {
+                            allpagesmapped = false;
+                            break;
+                        }
+                        pt = tmp[indices[PT_PD]];
                         if(pt.dir) {
                             ZF_LOGF_IF(!pt.cap, "Page table has frame table but no capability table");
                             frame_set_pin(pt.dir, true);
                             while(pagecount) { // PT
-                                fr = ((frame_ref_t*)frame_data(pt.dir))[indices[PT_PT]] & FR_FLAG_REF_AREA;
+                                frame_ref_t* pt_ptr = frame_data(pt.dir);
+                                if(!pt_ptr) {
+                                    allpagesmapped = false;
+                                    break;
+                                }
+                                fr = pt_ptr[indices[PT_PT]] & FR_FLAG_REF_AREA;
                                 if(!fr) {
                                     allpagesmapped = false;
                                     break;
@@ -665,8 +738,10 @@ void* userptr_read(userptr_t src, size_t len, seL4_Word badge)
                                 // pin the frame. if it was previously unpinned, indicate so to mapper.
                                 bool fr_pinned = frame_set_pin(fr, true);
                                 if(grp01_map_frame(0, fr, false, !fr_pinned, scratchvaddr, 
-                                    curras.perm, seL4_ARM_Default_VMAttributes) != seL4_NoError)
+                                    curras.perm, seL4_ARM_Default_VMAttributes) != seL4_NoError) {
                                         allpagesmapped = false;
+                                        break;
+                                }
                                 scratchvaddr += PAGE_SIZE_4K;
                                 // next
                                 --pagecount;
@@ -715,7 +790,7 @@ void* userptr_read(userptr_t src, size_t len, seL4_Word badge)
         // and remove the AS
         sync_mutex_lock(&scratch_lock);
         // find the index again, as our scratch AS might be moved around while we didn't lock the AS
-        int currasidx = addrspace_find(&scratchas, src);
+        int currasidx = addrspace_find(&scratchas, curras.begin);
         ZF_LOGF_IF(currasidx < 0, "Got invalid scratch AS.");
         addrspace_remove(&scratchas, currasidx);
         sync_mutex_unlock(&scratch_lock);
@@ -884,15 +959,26 @@ bool userptr_single_map(uintptr_t local, pd_indices_t useridx,
     struct pagedir pd = bk[pid].sh_pgd;
     frame_ref_t fr = 0;
     for(PDType pdtype=PT_PGD; pdtype > PT_PT; --pdtype) {
-        pd = PD_ENTRY(pd, useridx.arr[pdtype]);
+        struct pagedir* tmp = frame_data(pd.dir);
+        if(!tmp) {
+            ZF_LOGE("Not enough memory when mapping page directory.");
+            return 0;
+        }
+        pd = tmp[useridx.arr[pdtype]];
         if(!pd.dir) 
             break;
     }
     
     // if pddir == 0, then one or more of intermediary PD doesn't have a directory mapped
-    if(pd.dir) 
+    if(pd.dir) {
         // check if PT has entry
-        fr = ((frame_ref_t*)frame_data(pd.dir))[useridx.str.pt] & FR_FLAG_REF_AREA;
+        frame_ref_t* tmp = frame_data(pd.dir);
+        if(!tmp) {
+            ZF_LOGE("Not enough memory when mapping page table.");
+            return 0;
+        }
+        fr = tmp[useridx.str.pt] & FR_FLAG_REF_AREA;
+    }
 
     if(!fr) {
         // have to map frame
