@@ -44,8 +44,8 @@ void grp01_map_destroy(seL4_Word badge);
 
 // map a frame given by the frame capability to the given vspace, on SOS' behalf (SOS' cspace).
 // @return 0 on success
-seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_frame_on_delete, seL4_Word vaddr, seL4_CapRights_t rights,
-                     seL4_ARM_VMAttributes attr);
+seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_frame_on_delete, bool unpin_on_unmap,
+    seL4_Word vaddr, seL4_CapRights_t rights, seL4_ARM_VMAttributes attr);
 
 // unmap a virtual address range from vspace.
 // @param vaddrbegin page-aligned beginning of the frame to unmap

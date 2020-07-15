@@ -28,7 +28,8 @@ typedef enum {
 } PDType;
 
 typedef enum {
-    FR_FLAG_NOERASE = 0x8000000000000000ULL
+    FR_FLAG_NOERASE = 0x100000000000000ULL,
+    FR_FLAG_UNPIN_UNMAP = 0x200000000000000ULL
 } FrameRefFlag;
 
 // ---- macro section ----
@@ -113,7 +114,7 @@ bool grp01_map_init(seL4_Word badge, seL4_CPtr vspace)
     return true;
 }
 
-seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_frame_on_delete, seL4_Word vaddr, seL4_CapRights_t rights,
+seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_frame_on_delete, bool unpin_on_unmap, seL4_Word vaddr, seL4_CapRights_t rights,
                      seL4_ARM_VMAttributes attr)
 {
     seL4_Error err;
@@ -140,7 +141,8 @@ seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_fram
         if(!ppd->dir) {
             if(!(ppd->dir = alloc_empty_frame())) {
                 ZF_LOGE("Cannot allocate frame for shadow page directory");
-                return seL4_NotEnoughMemory;
+                err = seL4_NotEnoughMemory;
+                goto finish3;
             }
         }
         ppd_fr = ppd->dir;
@@ -347,7 +349,8 @@ seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_fram
     if(err == seL4_NoError) {
         // take note the frame to PT
         ((frame_ref_t*)frame_data(ppd->dir))[PD_INDEX(vaddr, PT_PT)] = frameref 
-            | (free_frame_on_delete ? 0 : FR_FLAG_NOERASE);
+            | (free_frame_on_delete ? 0 : FR_FLAG_NOERASE)
+            | (unpin_on_unmap ? FR_FLAG_UNPIN_UNMAP : 0);
         ((seL4_CPtr*)frame_data(ppd->cap))[PD_INDEX(vaddr, PT_PT)] = mapped_frame;
     } else {
         // free up the frames that we've allocated
@@ -361,6 +364,9 @@ finish:
     frame_set_pin(frameref, frameref_pin_status);
 finish2:
     frame_set_pin(ppd_fr, false);
+finish3:
+    if(unpin_on_unmap)
+        frame_set_pin(frameref, false);
     return err;
 }
 
@@ -426,7 +432,10 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_Word vaddrbegin, seL4_Word va
                                     ZF_LOGE_IF(cspace_delete(&cspace, *frcap) != seL4_NoError,
                                         "Error deleting capability for frame");
                                     cspace_free_slot(&cspace, *frcap);
-                                    // return frame back to frame table
+                                    // unpin if required
+                                    if(*fr & FR_FLAG_UNPIN_UNMAP)
+                                        frame_set_pin(*fr & FR_FLAG_REF_AREA, false);
+                                    // return frame back to frame table if required
                                     if(!(*fr & FR_FLAG_NOERASE))
                                         free_frame(*fr & FR_FLAG_REF_AREA);
                                     // zero out the PT
@@ -566,6 +575,8 @@ frame_ref_t grp01_get_frame(seL4_Word badge, seL4_Word vaddr)
 
 void* userptr_read(userptr_t src, size_t len, seL4_Word badge)
 {
+    assert_main_thread();
+
     // we always assume that the badge passed here is valid!
     seL4_CPtr vspace = proctable[badge].vspace;
 
@@ -630,24 +641,30 @@ void* userptr_read(userptr_t src, size_t len, seL4_Word badge)
     uintptr_t scratchvaddr = ret;
 
     bool allpagesmapped = true;
+    frame_set_pin(userbk->sh_pgd.dir, true);
     while(pagecount) { // PGD
         ZF_LOGF_IF(indices[PT_PGD] >= 512, "vaddr out of bound");
         pud = PD_ENTRY(userbk->sh_pgd, indices[PT_PGD]);
         if(pud.dir) {
+            frame_set_pin(pud.dir, true);
             while(pagecount) { // PUD
                 pd = PD_ENTRY(pud, indices[PT_PUD]);
                 if(pd.dir) {
+                    frame_set_pin(pd.dir, true);
                     while(pagecount) { // PD
                         pt = PD_ENTRY(pd, indices[PT_PD]);
                         if(pt.dir) {
                             ZF_LOGF_IF(!pt.cap, "Page table has frame table but no capability table");
+                            frame_set_pin(pt.dir, true);
                             while(pagecount) { // PT
                                 fr = ((frame_ref_t*)frame_data(pt.dir))[indices[PT_PT]] & FR_FLAG_REF_AREA;
                                 if(!fr) {
                                     allpagesmapped = false;
                                     break;
                                 }
-                                if(grp01_map_frame(0, fr, false, scratchvaddr, 
+                                // pin the frame. if it was previously unpinned, indicate so to mapper.
+                                bool fr_pinned = frame_set_pin(fr, true);
+                                if(grp01_map_frame(0, fr, false, !fr_pinned, scratchvaddr, 
                                     curras.perm, seL4_ARM_Default_VMAttributes) != seL4_NoError)
                                         allpagesmapped = false;
                                 scratchvaddr += PAGE_SIZE_4K;
@@ -658,6 +675,7 @@ void* userptr_read(userptr_t src, size_t len, seL4_Word badge)
                                     break;
                                 }
                             }
+                            frame_set_pin(pt.dir, false);
                         } else
                             allpagesmapped = false;
                         if(!allpagesmapped)
@@ -668,6 +686,7 @@ void* userptr_read(userptr_t src, size_t len, seL4_Word badge)
                             break;
                         }
                     }
+                    frame_set_pin(pd.dir, false);
                 } else
                     allpagesmapped = false;
                 if(!allpagesmapped)
@@ -678,12 +697,14 @@ void* userptr_read(userptr_t src, size_t len, seL4_Word badge)
                     break;
                 }
             }
+            frame_set_pin(pud.dir, false);
         } else
             allpagesmapped = false;
         if(!allpagesmapped)
             break;
         ++indices[PT_PGD];
     }
+    frame_set_pin(userbk->sh_pgd.dir, false);
     // there is no point in continuing the reading if not all pages are mapped.
     // we expect that pages are already mapped and init-ed when user wishes us to read it
     if(!allpagesmapped) {
@@ -708,6 +729,8 @@ void* userptr_read(userptr_t src, size_t len, seL4_Word badge)
 
 userptr_write_state_t userptr_write_start(userptr_t src, size_t len, seL4_Word badge)
 {
+    assert_main_thread();
+
     userptr_write_state_t ret = {0};
     addrspace_t scratch = {0};
     scratch.attr.type = AS_NORMAL;
@@ -805,6 +828,8 @@ userptr_write_state_t userptr_write_start(userptr_t src, size_t len, seL4_Word b
 
 bool userptr_write_next(userptr_write_state_t* it)
 {
+    assert_main_thread();
+
     if(it->curr) {
         // unmap SOS scratch frame
         it->curr = ROUND_DOWN(it->curr, PAGE_SIZE_4K);
@@ -839,6 +864,8 @@ bool userptr_write_next(userptr_write_state_t* it)
 
 void userptr_unmap(void* sosaddr)
 {
+    assert_main_thread();
+
     sync_mutex_lock(&scratch_lock);
     int idx = addrspace_find(&scratchas, (uintptr_t)sosaddr);
     if(idx >= 0) {
@@ -874,7 +901,8 @@ bool userptr_single_map(uintptr_t local, pd_indices_t useridx,
             ZF_LOGE("Cannot allocate frame for user.");
             return false;
         }
-        if(grp01_map_frame(pid, fr, true, PD_INDEX_VADDR(useridx), 
+        frame_set_pin(fr, true);
+        if(grp01_map_frame(pid, fr, true, true, PD_INDEX_VADDR(useridx), 
             userright, seL4_ARM_Default_VMAttributes) != seL4_NoError)
         {
             ZF_LOGE("Cannot map user's frame.");
@@ -883,7 +911,8 @@ bool userptr_single_map(uintptr_t local, pd_indices_t useridx,
     } 
     
     // map the frame to the designated scratch address
-    if(grp01_map_frame(0, fr, false, local, seL4_AllRights, 
+    bool fr_pinned = frame_set_pin(fr, true);
+    if(grp01_map_frame(0, fr, false, !fr_pinned, local, seL4_AllRights, 
         seL4_ARM_Default_VMAttributes) != seL4_NoError)
     {
         ZF_LOGE("Cannot map frame to SOS scratch");

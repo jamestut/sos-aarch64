@@ -92,7 +92,7 @@ static int load_segment_into_vspace(seL4_Word badge, seL4_CPtr loadee, char *src
         }
 
         /* map the frame into the loadee address space */
-        err = grp01_map_frame(badge, frame, true, loadee_vaddr, permissions,
+        err = grp01_map_frame(badge, frame, true, false, loadee_vaddr, permissions,
                         seL4_ARM_Default_VMAttributes);
 
         /* A frame has already been mapped at this address. This occurs when segments overlap in

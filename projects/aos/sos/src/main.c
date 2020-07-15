@@ -378,7 +378,7 @@ static uintptr_t init_process_stack(seL4_Word badge, elf_t *elf_file)
     }
 
     /* Map in the initial stack frame for the user app */
-    seL4_Error err = grp01_map_frame(badge, initial_stack, true,
+    seL4_Error err = grp01_map_frame(badge, initial_stack, true, false,
                                PROCESS_STACK_TOP - PAGE_SIZE_4K, seL4_AllRights, 
                                seL4_ARM_Default_VMAttributes);
     if (err != 0) {
@@ -583,7 +583,7 @@ bool start_first_process(char *app_name, seL4_CPtr ep)
     }
 
     /* Map in the IPC buffer for the thread */
-    err = grp01_map_frame(TTY_EP_BADGE, pt->ipc_buffer_frame, true, PROCESS_IPC_BUFFER,
+    err = grp01_map_frame(TTY_EP_BADGE, pt->ipc_buffer_frame, true, false, PROCESS_IPC_BUFFER,
                     seL4_AllRights, seL4_ARM_Default_VMAttributes);
     if (err != 0) {
         ZF_LOGE("Unable to map IPC buffer for user app");
@@ -716,7 +716,6 @@ NORETURN void *main_continued(UNUSED void *arg)
     start_fake_timer();
     grp01_map_bookkeep_init();
     ZF_LOGF_IF(!grp01_map_init(0, seL4_CapInitThreadVSpace), "Cannot init bookkepping for SOS frame map");
-    //fake_fs_init(0xA00000);
 
     /* run sos initialisation tests */
     run_tests(&cspace);
@@ -741,6 +740,7 @@ NORETURN void *main_continued(UNUSED void *arg)
     // init file systems
     console_fs_init();
     grp01_nfs_init();
+    // fake_fs_init(0xA00000);
     frame_table_init_page_file();
 
     /* Start the user application */

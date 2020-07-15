@@ -60,7 +60,7 @@ void fake_fs_init(size_t capacity)
 
     // premap the frames
     for(size_t i = 0; i < pagecount; ++i) {
-        seL4_Error err = grp01_map_frame(0, frames[i], false, SOS_FAKE_FS + PAGE_SIZE_4K * i, 
+        seL4_Error err = grp01_map_frame(0, frames[i], false, false, SOS_FAKE_FS + PAGE_SIZE_4K * i, 
             seL4_AllRights, seL4_ARM_Default_VMAttributes);
         if(err != seL4_NoError) {
             ZF_LOGE("Error mapping frame for fake file system: %d", err);
