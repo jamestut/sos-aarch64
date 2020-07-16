@@ -560,6 +560,7 @@ ssize_t fileman_chunked_write_broker(struct filehandler* fh, ssize_t id, userptr
         ret += written;
         ptr += written;
         len -= written;
+        offset += written;
 
         // maybe EOF reached?
         if(written < toread)

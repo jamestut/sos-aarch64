@@ -493,11 +493,12 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_Word vaddrbegin, seL4_Word va
                                 fr += indices[PT_PT];
                                 if(*fr) {
                                     // the actual unmapping
-                                    frcap = ((frame_ref_t*)frame_data(pt.cap));
+                                    frcap = ((seL4_CPtr*)frame_data(pt.cap));
                                     if(frcap) {
                                         frcap += indices[PT_PT];
-                                        ZF_LOGE_IF(seL4_ARM_Page_Unmap(*frcap) != seL4_NoError,
-                                            "Error unmapping frame");
+                                        // any errors would be caused by parent page revoking this
+                                        // capability (e.g. due to page out)
+                                        seL4_ARM_Page_Unmap(*frcap);
                                         // free the duplicated capability
                                         ZF_LOGE_IF(cspace_delete(&cspace, *frcap) != seL4_NoError,
                                             "Error deleting capability for frame");
@@ -1019,8 +1020,8 @@ bool userptr_single_map(uintptr_t local, pd_indices_t useridx,
             ZF_LOGE("Cannot allocate frame for user.");
             return false;
         }
-        frame_set_pin(fr, true);
-        if(grp01_map_frame(pid, fr, true, true, PD_INDEX_VADDR(useridx), 
+        // map to user's address space so that they can read the data!
+        if(grp01_map_frame(pid, fr, true, false, PD_INDEX_VADDR(useridx), 
             userright, seL4_ARM_Default_VMAttributes) != seL4_NoError)
         {
             ZF_LOGE("Cannot map user's frame.");

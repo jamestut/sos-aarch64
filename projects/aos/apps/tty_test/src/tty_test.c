@@ -40,7 +40,7 @@
 
 #define PAGE_SIZE_4K 0x1000
 
-#define MALLOC_SZ      128*1024*1024
+#define MALLOC_SZ      1024*1024
 #define MALLOC_TEST    MALLOC_SZ
 #define WRITE_TEST_SZ  20000
 
@@ -172,8 +172,8 @@ void vmem_abuse()
     printf("Big mmap unmapped\n");
     {
         // uncomment to fault
-        //bigmmap[0x54321DEFAB] = 'D';
-        //puts("Success???");
+        // bigmmap[0x54321DEFAB] = 'D';
+        // puts("Success???");
     }
 
     printf("Malloc test of size %d\n", MALLOC_SZ);
@@ -196,26 +196,78 @@ void vmem_abuse()
     puts("Finished read test.");
 }
 
+void trash_test()
+{
+    char* ptr = malloc(MALLOC_SZ);
+    printf("Base PTR = %p | size = %llu\n", ptr, MALLOC_SZ);
+    // touch every page
+    puts("Writing ...");
+    srand(1);
+    const size_t pagecount = (MALLOC_SZ/PAGE_SIZE_4K)-1;
+    printf("Will touch %d pages\n", pagecount);
+    for(size_t i = 0; i < pagecount; ++i) {
+        *((int*)(ptr + i*PAGE_SIZE_4K)) = rand();
+        *((int*)(ptr + i*PAGE_SIZE_4K + 2000)) = rand();
+        *((int*)(ptr + i*PAGE_SIZE_4K + 4000)) = rand();
+    }
+    // check
+    puts("Reading back ...");
+    srand(1);
+    for(size_t i = 0; i < pagecount; ++i) {
+        assert(*((int*)(ptr + i*PAGE_SIZE_4K)) == rand());
+        assert(*((int*)(ptr + i*PAGE_SIZE_4K + 2000)) == rand());
+        assert(*((int*)(ptr + i*PAGE_SIZE_4K + 4000)) == rand());
+    }
+    puts("OK!");
+}
+
+void trash_test_2()
+{
+    char* ptr = malloc(MALLOC_SZ);
+
+    puts("Writing ...");
+    for(size_t i = 0; i < MALLOC_SZ; ++i) {
+        if(i % (128 * 1024) == 0) {
+            printf("Write: %llu\n", i);
+        }
+        ptr[i] = 'A' + (i % 26);
+    }
+
+    puts("Verifying ...");
+    for(size_t i = 0; i < MALLOC_SZ; ++i) {
+        if(i % (128 * 1024) == 0) {
+            printf("Verified: %llu\n", i);
+        }
+        assert(ptr[i] == 'A' + (i % 26));
+    }
+
+    puts("OK!");
+
+    puts("Write to console. Be ready! This is A LOT!");
+    for(int i=0; i<3; ++i) {
+        sleep(1);
+        printf("%d\n", i+1);
+    }
+    int fh = open("console", O_WRONLY);
+    write(fh, ptr, MALLOC_SZ);
+}
+
 int main(void)
 {
     long ret;
     sosapi_init_syscall_table();
 
     sos_debug_print("tty_test started\n", 17);
+    sos_debug_printf("on main now\n");
 
     /* initialise communication */
     ttyout_init();
 
-    printf("Current stack is %d pages\n", sos_grow_stack(0));
-    printf("New stack is now %d pages\n", sos_grow_stack(999999999));
-    printf("Regrowing again. Stack is now %d pages\n", sos_grow_stack(999999999));
+    sos_stat_t st;
 
-    int testfh = open("console", O_RDWR);
+    trash_test_2();
 
-    // recurse_test(0);
-    // read_test(testfh);
-    vmem_abuse();
-    // write_test(testfh);
+    puts("Doing nothing afterwards!");
 
     while(1)
         sleep(1000);
