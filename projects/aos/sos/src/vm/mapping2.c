@@ -53,9 +53,6 @@ size_t PD_INDEX_VADDR_MACROEXP(pd_indices_t ind) {return PD_INDEX_VADDR(ind);}
 inline bool userptr_single_map(uintptr_t local, pd_indices_t useridx, 
     seL4_CapRights_t userright, seL4_Word pid);
 
-#define PD_ENTRY(pd, idx) \
-    (((struct pagedir*)frame_data((pd).dir))[(idx)])
-
 PACKED struct pagedir {
     // this frame contains array of child page directories (this structure)
     frame_ref_t dir : FRAME_TABLE_BITS;
@@ -454,42 +451,69 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_Word vaddrbegin, seL4_Word va
     
     // to check that frame_data successfully get a frame
     struct pagedir * tmp;
+    seL4_Error err = seL4_NoError;
 
     frame_set_pin(lbk->sh_pgd.dir, true);
     while(numpages) { // PGD
         ZF_LOGF_IF(indices[PT_PGD] >= 512, "vaddr out of bound");
-        pud = PD_ENTRY(lbk->sh_pgd, indices[PT_PGD]);
+        tmp = frame_data(lbk->sh_pgd.dir);
+        if(!tmp) {
+            err = seL4_NotEnoughMemory;
+            break;
+        }
+        pud = tmp[indices[PT_PGD]];
         if(pud.dir) {
             frame_set_pin(pud.dir, true);
             while(numpages) { // PUD
-                pd = PD_ENTRY(pud, indices[PT_PUD]);
+                tmp = frame_data(pud.dir);
+                if(!tmp) {
+                    err = seL4_NotEnoughMemory;
+                    break;
+                }
+                pd = tmp[indices[PT_PUD]];
                 if(pd.dir) {
                     frame_set_pin(pd.dir, true);
                     while(numpages) { // PD
-                        pt = PD_ENTRY(pd, indices[PT_PD]);
+                        tmp = frame_data(pd.dir);
+                        if(!tmp) {
+                            err = seL4_NotEnoughMemory;
+                            break;
+                        }
+                        pt = tmp[indices[PT_PD]];
                         if(pt.dir) {
                             ZF_LOGF_IF(!pt.cap, "Page table has frame table but no capability table");
                             frame_set_pin(pt.dir, true);
                             frame_set_pin(pt.cap, true);
                             while(numpages) { // PT
-                                fr = ((frame_ref_t*)frame_data(pt.dir)) + indices[PT_PT];
+                                fr = ((frame_ref_t*)frame_data(pt.dir));
+                                if(!fr) {
+                                    err = seL4_NotEnoughMemory;
+                                    break;
+                                }
+                                fr += indices[PT_PT];
                                 if(*fr) {
                                     // the actual unmapping
-                                    frcap = ((frame_ref_t*)frame_data(pt.cap)) + indices[PT_PT];
-                                    ZF_LOGE_IF(seL4_ARM_Page_Unmap(*frcap) != seL4_NoError,
-                                        "Error unmapping frame");
-                                    // free the duplicated capability
-                                    ZF_LOGE_IF(cspace_delete(&cspace, *frcap) != seL4_NoError,
-                                        "Error deleting capability for frame");
-                                    cspace_free_slot(&cspace, *frcap);
-                                    // unpin if required
-                                    if(*fr & FR_FLAG_UNPIN_UNMAP)
-                                        frame_set_pin(*fr & FR_FLAG_REF_AREA, false);
-                                    // return frame back to frame table if required
-                                    if(!(*fr & FR_FLAG_NOERASE))
-                                        free_frame(*fr & FR_FLAG_REF_AREA);
-                                    // zero out the PT
-                                    *fr = *frcap = 0;
+                                    frcap = ((frame_ref_t*)frame_data(pt.cap));
+                                    if(frcap) {
+                                        frcap += indices[PT_PT];
+                                        ZF_LOGE_IF(seL4_ARM_Page_Unmap(*frcap) != seL4_NoError,
+                                            "Error unmapping frame");
+                                        // free the duplicated capability
+                                        ZF_LOGE_IF(cspace_delete(&cspace, *frcap) != seL4_NoError,
+                                            "Error deleting capability for frame");
+                                        cspace_free_slot(&cspace, *frcap);
+                                        // unpin if required
+                                        if(*fr & FR_FLAG_UNPIN_UNMAP)
+                                            frame_set_pin(*fr & FR_FLAG_REF_AREA, false);
+                                        // return frame back to frame table if required
+                                        if(!(*fr & FR_FLAG_NOERASE))
+                                            free_frame(*fr & FR_FLAG_REF_AREA);
+                                        // zero out the PT
+                                        *fr = *frcap = 0;
+                                    } else {
+                                        err = seL4_NotEnoughMemory;
+                                        break;
+                                    }
                                 }
                                 --numpages;
                                 if(++indices[PT_PT] >= 512) {
@@ -499,6 +523,8 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_Word vaddrbegin, seL4_Word va
                             }
                             frame_set_pin(pt.dir, false);
                             frame_set_pin(pt.cap, false);
+                            if(err)
+                                break;
                             if(full) {
                                 // free this PT's frame data
                                 free_frame(pt.dir);
@@ -527,6 +553,8 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_Word vaddrbegin, seL4_Word va
                         }
                     }
                     frame_set_pin(pd.dir, false);
+                    if(err)
+                        break;
                     if(full) {
                         // free this PD's frame data
                         free_frame(pd.dir);
@@ -559,6 +587,8 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_Word vaddrbegin, seL4_Word va
                 }
             }
             frame_set_pin(pud.dir, false);
+            if(err)
+                break;
             if(full) {
                 // free this PUD's frame data
                 free_frame(pud.dir);
@@ -601,7 +631,9 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_Word vaddrbegin, seL4_Word va
             free_frame(lbk->sh_pgd.ut);
     }
 
-    return seL4_NoError;
+    // at the moment we have nowhere to go but panic if unmap failed
+    ZF_LOGF_IF(err != seL4_NoError, "Unmap error: %d", err);
+    return err;
 }
 
 frame_ref_t grp01_get_frame(seL4_Word badge, seL4_Word vaddr)
