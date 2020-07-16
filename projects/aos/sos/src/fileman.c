@@ -24,6 +24,7 @@
 
 #define MAX_FH  128
 #define SPECIAL_HANDLERS 2
+#define READ_PAGE_CHUNK 2
 
 // WARNING! double eval!
 #define DIV_ROUND_UP_CEXPR(n,d) \
@@ -114,6 +115,7 @@ void bg_fileman_stat(void* data);
 void bg_fileman_readdir(void* data);
 int fileman_rw_dispatch(bool read, seL4_Word pid, int fh, seL4_CPtr reply, userptr_t buff, uint32_t len);
 ssize_t fileman_write_broker(struct filehandler* fh, ssize_t id, userptr_t ptr, seL4_Word badge, size_t len, off_t offset);
+ssize_t fileman_chunked_write_broker(struct filehandler* fh, ssize_t id, userptr_t ptr, seL4_Word badge, size_t len, off_t offset);
 ssize_t fileman_read_broker(struct filehandler* fh, ssize_t id, userptr_t ptr, seL4_Word badge, size_t len, off_t offset);
 struct filehandler * find_handler(const char* fn);
 char* map_user_string(userptr_t ptr, size_t len, seL4_Word badge, char* originalchar);
@@ -527,13 +529,42 @@ finish:
 ssize_t fileman_write_broker(struct filehandler* fh, ssize_t id, userptr_t ptr, seL4_Word badge, size_t len, off_t offset)
 {
     void* buff = delegate_userptr_read(ptr, len, badge);
-    if(!buff)
-        return EFAULT * -1;
+    if(!buff) {
+        // try chunked write
+        return fileman_chunked_write_broker(fh, id, ptr, badge, len, offset);
+    }
     
     ssize_t ret = fh->write(badge, id, buff, offset, len);
 
     delegate_userptr_unmap(buff);
 
+    return ret;
+}
+
+ssize_t fileman_chunked_write_broker(struct filehandler* fh, ssize_t id, userptr_t ptr, seL4_Word badge, size_t len, off_t offset)
+{
+    ssize_t ret = 0;
+    while(len) {
+        size_t toread = MIN(READ_PAGE_CHUNK * PAGE_SIZE_4K - (ptr % PAGE_SIZE_4K), len);
+        void* buff = delegate_userptr_read(ptr, toread, badge);
+        if(!buff) {
+            if(!ret)
+                ret = -EFAULT;
+            break;
+        }
+        ssize_t written = fh->write(badge, id, buff, offset, toread);
+
+        delegate_userptr_unmap(buff);
+
+        // advance position
+        ret += written;
+        ptr += written;
+        len -= written;
+
+        // maybe EOF reached?
+        if(written < toread)
+            break;
+    }
     return ret;
 }
 
@@ -585,6 +616,11 @@ struct filehandler * find_handler(const char* fn)
 
 char* map_user_string(userptr_t ptr, size_t len, seL4_Word badge, char* originalchar)
 {
+    if(len >= MAX_FILENAME) {
+        // flat out refuse if filename is too long!
+        ZF_LOGI("Refused to service very long file name.");
+        return NULL;
+    }
     // WARNING! this function is meant to be called from main thread
     char* ret = userptr_read(ptr, len + 1, badge);
     if(!ret)

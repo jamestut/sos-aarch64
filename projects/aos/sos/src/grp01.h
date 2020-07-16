@@ -8,6 +8,9 @@
 // max no. of processes supported
 #define MAX_PID             128
 
+// max char in filename, including NULL terminator
+#define MAX_FILENAME       4096
+
 // max frame number bits. this directly dictates the supported
 // amount of memory + pagefile. Can be set to 21 (2^21*4096 = 8 GB)
 // before it fires static asserts, especially on shadow page tables.
