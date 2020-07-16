@@ -28,9 +28,6 @@ static void sleep_callback(UNUSED uint32_t dummy_id, void * data)
     seL4_SetMR(0, 1);
     seL4_Send(sleeper->reply, reply_msg);
 
-    // reuse reply object
-    delegate_reuse_reply(sleeper->reply);
-    
     // dont forget to free our sleeper!
     free(sleeper);
 }
