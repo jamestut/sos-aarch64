@@ -20,14 +20,17 @@
 #include <fcntl.h>
 #include <time.h>
 #include <sys/time.h>
+#include <sys/mman.h>
 #include <utils/time.h>
 #include <syscalls.h>
 /* Your OS header file */
 #include <sos.h>
 
 #include "benchmark.h"
+#include "md5.h"
 
 #define BUF_SIZ    6144
+#define BIG_BUF_SIZ    262144
 #define MAX_ARGS   32
 
 static int in;
@@ -130,8 +133,14 @@ static int cp(int argc, char **argv)
 
     assert(fd >= 0);
 
+    size_t total = 0;
+
     while ((num_read = read(fd, buf, BUF_SIZ)) > 0) {
         num_written = write(fd_out, buf, num_read);
+        if(num_written < 0)
+            break;
+        total += num_written;
+        printf("Processed: %llu bytes\n", total);
     }
 
     if (num_read == -1 || num_written == -1) {
@@ -245,6 +254,64 @@ static int dir(int argc, char **argv)
     return 0;
 }
 
+static int thrash(int argc, char ** argv)
+{
+    if(argc != 3) {
+        printf("usage: %s [size_in_bytes] [result_file]\n", argv[0]);
+        return 1;
+    }
+
+    uint32_t malloc_sz;
+    if(!sscanf(argv[1], "%u", &malloc_sz)) {
+        puts("Invalid argument");
+        return 1;
+    }
+
+    char* ptr = malloc(malloc_sz);
+
+    puts("Writing ...");
+    for(size_t i = 0; i < malloc_sz; ++i) {
+        if(i % (128 * 1024) == 0) {
+            printf("Written: %llu bytes\n", i);
+        }
+        ptr[i] = 'A' + (i % 26);
+    }
+
+    puts("Verifying ...");
+    for(size_t i = 0; i < malloc_sz; ++i) {
+        if(i % (128 * 1024) == 0) {
+            printf("Verified: %llu bytes\n", i);
+        }
+        unsigned char expectation = ('A' + (i % 26));
+        if(ptr[i] != expectation) {
+            printf("Verify error at %d. Expect %d got %d.\n",
+                expectation, ptr[i]);
+            goto error;
+        }
+    }
+
+    puts("OK!");
+    printf("Saving the test file to %s ...\n", argv[2]);
+
+    int fh = open(argv[2], O_WRONLY);
+    if(fh < 0) {
+        puts("Error opening output file");
+        goto error;
+    }
+    ssize_t written = write(fh, ptr, malloc_sz);
+    printf("Wrote %lld, expected %lld\n", written, malloc_sz);
+    close(fh);
+
+    // success
+    free(ptr);
+    return 0;
+
+error:
+    free(ptr);
+    return 1;
+}
+
+
 static int second_sleep(int argc, char *argv[])
 {
     if (argc != 2) {
@@ -313,6 +380,68 @@ static int benchmark(int argc, char *argv[])
     }
 }
 
+static int md5(int argc, char *argv[])
+{
+    if(argc != 2) {
+        printf("Usage: %s [file]\n", argv[0]);
+        return 1;
+    }
+
+    mbedtls_md5_context md5ctx;
+    mbedtls_md5_init(&md5ctx);
+
+    if(mbedtls_md5_starts_ret(&md5ctx)) {
+        puts("MD5 start error");
+        return 1;
+    }
+
+    size_t start_ms = sos_sys_time_stamp() / 1000;
+    
+    int fh = open(argv[1], O_RDONLY);
+    if(fh < 0) {
+        puts("Error opening file");
+        return 1;
+    }
+
+    puts("Computing checksum ...");
+    size_t acc = 0;
+    void *buff = malloc(BIG_BUF_SIZ);
+    printf("Buffer area: %p\n", buff);
+    ssize_t rd = 0;
+    for(;;) {
+        rd = read(fh, buff, BIG_BUF_SIZ);
+        if(rd < 0) {
+            printf("Read error: %lld\n", sos_errno);
+            return;
+        }
+        acc += rd;
+        if(mbedtls_md5_update_ret(&md5ctx, buff, rd)) {
+            puts("MD5 update error");
+            return;
+        }
+        if(rd < BUF_SIZ)
+            break;
+        printf("Processed %d bytes\n", acc);
+    }
+    munmap(buff, BIG_BUF_SIZ);
+    
+    printf("Total read: %llu\n", acc);
+    unsigned char output[16];
+    if(mbedtls_md5_finish_ret(&md5ctx, output)) {
+        puts("MD5 finish error");
+        return;
+    }
+
+    fputs("Hash: ", stdout);
+    for(int i=0; i<sizeof(output); ++i)
+        printf("%02x", output[i]);
+    putchar('\n');
+
+    printf("Time elapsed = %lld ms\n", (sos_sys_time_stamp() / 1000) - start_ms);
+
+    close(fh);
+}
+
 struct command {
     char *name;
     int (*command)(int argc, char **argv);
@@ -322,7 +451,7 @@ struct command commands[] = { { "dir", dir }, { "ls", dir }, { "cat", cat }, {
         "cp", cp
     }, { "ps", ps }, { "exec", exec }, {"sleep", second_sleep}, {"msleep", milli_sleep},
     {"time", second_time}, {"mtime", micro_time}, {"kill", kill},
-    {"benchmark", benchmark}
+    {"benchmark", benchmark},{"thrash",thrash},{"md5",md5}
 };
 
 int main(void)

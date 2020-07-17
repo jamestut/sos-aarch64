@@ -12,7 +12,7 @@ void timer_ticker(void* unused);
 void start_fake_timer()
 {
     if(!started) {
-        spawn(timer_ticker, NULL, "fake_timer", 0);
+        spawn(timer_ticker, NULL, "fake_timer", 0, 0, 0);
         started = true;
         ZF_LOGI("Fake timer started!");
     }
@@ -20,7 +20,6 @@ void start_fake_timer()
 
 void timer_ticker(void* unused)
 {
-    // TODO: GRP01 - messes with IPC. fix.
     while(1) {
         for(int i=0; i<10; ++i)
             seL4_Yield();

@@ -13,6 +13,7 @@
 
 #include "bootstrap.h"
 #include "ut.h"
+#include "grp01.h"
 
 #include <stdlib.h>
 #include <stdbool.h>
@@ -52,20 +53,31 @@ extern char *frame_table_list_names[];
 #define LIST_ID_NAME(list_id) (frame_table_list_names[list_id])
 
 /* The actual representation of a frame in the frame table. */
+#define MAX_FRAME_USAGE 3
 typedef struct frame frame_t;
 PACKED struct frame {
-    /* Page used to map frame into SOS memory. */
-    seL4_ARM_Page sos_page: 23;
+    // Index to the backing storage
+    // If "paged" is true, backing = file, else backing = memory frame
+    size_t back_idx: FRAME_TABLE_BITS;
     /* Index in frame table of previous element in list. */
-    frame_ref_t prev : 19;
+    frame_ref_t prev : FRAME_TABLE_BITS;
     /* Index in frame table of next element in list. */
-    frame_ref_t next : 19;
+    frame_ref_t next : FRAME_TABLE_BITS;
     /* Indicates which list the frame is in. */
     list_id_t list_id : 2;
-    /* Unused bits */
-    size_t unused : 1;
+    // Indicates if this frame is pinned 
+    bool pinned : 1;
+    // Indicates if frame is paged
+    bool paged : 1;
+    // Indicates if frame has underlying backing store
+    bool backed : 1;
+    // Indicates if, on fault, requires zeroing out the new frame
+    bool reqempty : 1;
+    // usage count, for "second chance" algorithm (max 3x if 2 bits)
+    size_t usage : 2;
 };
-compile_time_assert("Small CPtr size", 23 >= INITIAL_TASK_CSPACE_BITS);
+// our preferred target size
+compile_time_assert(struct frame size, sizeof(frame_t) == (sizeof(size_t) * 2));
 
 /*
  * Initialise frame table.
@@ -74,6 +86,9 @@ compile_time_assert("Small CPtr size", 23 >= INITIAL_TASK_CSPACE_BITS);
  * @param vspace  virtual address space of SOS.
  */
 void frame_table_init(cspace_t *cspace, seL4_CPtr vspace);
+
+// open the page file
+void frame_table_init_page_file();
 
 /*
  * Get the cspace used by the frame table.
@@ -109,7 +124,8 @@ frame_ref_t alloc_frame(void);
 frame_ref_t alloc_empty_frame(void);
 
 /*
- * Free a frame allocated by the frame table.
+ * Free a frame allocated by the frame table, and invalidates all derived
+ * frames.
  *
  * This returns the frame to the frame table for re-use rather than
  * returning it to the untyped allocator.
@@ -144,7 +160,7 @@ void invalidate_frame(frame_ref_t frame_ref);
 
 /*
  * Get the capability to the page used to map the frame into SOS.
- *
+ * 
  * This can be copied to create mappings into additional virtual address
  * spaces.
  */
@@ -156,3 +172,9 @@ seL4_ARM_Page frame_page(frame_ref_t frame_ref);
  * This should only be used for debugging.
  */
 frame_t *frame_from_ref(frame_ref_t frame_ref);
+
+// pin/unpin the frame.
+// returns the previous pinning status.
+bool frame_set_pin(frame_ref_t frame_ref, bool pin);
+
+bool page_out_frame(frame_ref_t frame_ref);

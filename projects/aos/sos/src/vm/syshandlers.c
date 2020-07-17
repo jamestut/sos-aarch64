@@ -66,7 +66,7 @@ ssize_t handle_brk(dynarray_t* arr, seL4_Word badge, seL4_CPtr vspace, uintptr_t
             // see if we have to reduce the heap section
             if(target < heapas->end) {
                 // indeed!
-                ZF_LOGE_IF(grp01_unmap_frame(badge, vspace, target, heapas->end, false) != seL4_NoError,
+                ZF_LOGE_IF(grp01_unmap_frame(badge, target, heapas->end, false) != seL4_NoError,
                     "Unmapping frames from shrunk heap brk failed.");
                 ret = heapas->end = target;
                 
@@ -179,11 +179,11 @@ ssize_t handle_munmap(dynarray_t* asarr, seL4_Word badge, seL4_CPtr vspace,
     // these suboperations should never ever returns an error unless we have bug!
     if(deletewhole) {
         // easy! just delete the entire AS!
-        ZF_LOGF_IF(grp01_unmap_frame(badge, vspace, as->begin, as->end, false) != seL4_NoError,
+        ZF_LOGF_IF(grp01_unmap_frame(badge, as->begin, as->end, false) != seL4_NoError,
             "Fatal unmap error!");
         addrspace_remove(asarr, asidx);
     } else {
-        ZF_LOGF_IF(grp01_unmap_frame(badge, vspace, vaddr, vaddr + len, false) != seL4_NoError,
+        ZF_LOGF_IF(grp01_unmap_frame(badge, vaddr, vaddr + len, false) != seL4_NoError,
             "Fatal unmap error!");
         
         // require 1 more AS? or is resizing enough?
@@ -250,7 +250,7 @@ ssize_t handle_grow_stack(dynarray_t* asarr, seL4_Word badge, seL4_CPtr vspace, 
     newbegin = stackas->end - (numpages << seL4_PageBits);
     if(newbegin > stackas->begin) {
         // shrink!
-        ZF_LOGE_IF(grp01_unmap_frame(badge, vspace, stackas->begin, newbegin, false) != seL4_NoError,
+        ZF_LOGE_IF(grp01_unmap_frame(badge, stackas->begin, newbegin, false) != seL4_NoError,
             "Unmapping frames from shrunk stack failed.");
     }
     stackas->begin = newbegin;

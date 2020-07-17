@@ -87,7 +87,7 @@ static void thread_trampoline(sos_thread_t *thread, thread_main_f *function, voi
  *
  * TODO: fix memory leaks
  */
-sos_thread_t *thread_create(thread_main_f function, void *arg, const char* name, seL4_Word badge, bool resume)
+sos_thread_t *thread_create(thread_main_f function, void *arg, const char* name, seL4_Word badge, bool resume, seL4_CPtr ep, seL4_Word prio)
 {
     /* we allocate stack for additional sos threads
      * on top of the stack for sos */
@@ -130,7 +130,7 @@ sos_thread_t *thread_create(thread_main_f function, void *arg, const char* name,
     }
 
     /* now mutate the cap, thereby setting the badge */
-    seL4_Word err = cspace_mint(&cspace, new_thread->user_ep, &cspace, ipc_ep, seL4_AllRights,
+    seL4_Word err = cspace_mint(&cspace, new_thread->user_ep, &cspace, ep, seL4_AllRights,
                                 badge);
     if (err) {
         ZF_LOGE("Failed to mint user ep");
@@ -181,8 +181,8 @@ sos_thread_t *thread_create(thread_main_f function, void *arg, const char* name,
      * In MCS, fault end point needed here should be in current thread's cspace.
      * NOTE this will use the unbadged ep unlike above, you might want to mint it with a badge
      * so you can identify which thread faulted in your fault handler */
-    err = seL4_TCB_SetSchedParams(new_thread->tcb, seL4_CapInitThreadTCB, seL4_MinPrio,
-                                  SOS_THREAD_PRIORITY, new_thread->sched_context,
+    err = seL4_TCB_SetSchedParams(new_thread->tcb, seL4_CapInitThreadTCB, prio,
+                                  prio, new_thread->sched_context,
                                   new_thread->user_ep);
     if (err != seL4_NoError) {
         ZF_LOGE("Unable to set scheduling params");
@@ -227,7 +227,7 @@ sos_thread_t *thread_create(thread_main_f function, void *arg, const char* name,
     return new_thread;
 }
 
-sos_thread_t *spawn(thread_main_f function, void *arg, const char* name, seL4_Word badge)
+sos_thread_t *spawn(thread_main_f function, void *arg, const char* name, seL4_Word badge, seL4_CPtr ep, seL4_Word prio)
 {
-    return thread_create(function, arg, name, badge, true);
+    return thread_create(function, arg, name, badge, true, ep == seL4_CapNull ? ipc_ep : ep, prio);
 }

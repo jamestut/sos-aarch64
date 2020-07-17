@@ -8,15 +8,17 @@
 // max no. of processes supported
 #define MAX_PID             128
 
-// if this flag is true, then the IPC message must come from our
-// internal threads
-#define INT_THRD_BADGE_FLAG (0x1000)
+// max char in filename, including NULL terminator
+#define MAX_FILENAME       4096
 
-// badges for internal threads
-#define BACKEND_HANDLER_BADGE   (INT_THRD_BADGE_FLAG + 1)
-#define LIBNFS_EVTLOOP_BADGE    (INT_THRD_BADGE_FLAG + 2)
+// max frame number bits. this directly dictates the supported
+// amount of memory + pagefile. Can be set to 21 (2^21*4096 = 8 GB)
+// before it fires static asserts, especially on shadow page tables.
+#define FRAME_TABLE_BITS 21
 
-// number of handlers in bgworker
-#define BG_HANDLERS         1
+// badge for main thread delegation
+#define BADGE_DELEGATE  (0x10000)
+// badge for returning reply object
+#define BADGE_REPLY_RET (0x10001)
 
 typedef uintptr_t userptr_t;

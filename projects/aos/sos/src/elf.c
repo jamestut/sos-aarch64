@@ -92,7 +92,7 @@ static int load_segment_into_vspace(seL4_Word badge, seL4_CPtr loadee, char *src
         }
 
         /* map the frame into the loadee address space */
-        err = grp01_map_frame(badge, frame, true, loadee, loadee_vaddr, permissions,
+        err = grp01_map_frame(badge, frame, true, false, loadee_vaddr, permissions,
                         seL4_ARM_Default_VMAttributes);
 
         /* A frame has already been mapped at this address. This occurs when segments overlap in
@@ -108,7 +108,7 @@ static int load_segment_into_vspace(seL4_Word badge, seL4_CPtr loadee, char *src
             // return the allocated frame back to frame_table
             free_frame(frame);
             // get the allocated frame instead :)
-            frame = grp01_get_frame(badge, loadee, loadee_vaddr);
+            frame = grp01_get_frame(badge, loadee_vaddr);
             // if we got FRAME_NULL here, we have a serious bug!
             ZF_LOGF_IF(!frame, "Got NULL frame, but the frame was already mapped.");
         } else if (err != seL4_NoError) {
@@ -117,6 +117,7 @@ static int load_segment_into_vspace(seL4_Word badge, seL4_CPtr loadee, char *src
         }
 
         /* finally copy the data */
+        // FT: no pin needed.
         unsigned char *loader_data = frame_data(frame);
 
         /* Write any zeroes at the start of the block. */

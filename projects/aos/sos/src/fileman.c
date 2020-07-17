@@ -20,27 +20,17 @@
 #include "delegate.h"
 
 #include "fileman.h"
+#include "proctable.h"
 
 #define MAX_FH  128
-#define SPECIAL_HANDLERS 1
+#define SPECIAL_HANDLERS 2
+#define READ_PAGE_CHUNK 2
 
 // WARNING! double eval!
 #define DIV_ROUND_UP_CEXPR(n,d) \
     (((n) + (d) - 1) / (d))
 
 // struct declaration area
-
-struct filehandler
-{
-    file_open_fn open;
-    file_rw_fn read;
-    file_rw_fn write;
-    file_stat_fn stat;
-    file_opendir_fn opendir;
-    file_dirent_fn gdent;
-    file_closedir_fn closedir;
-    file_close_fn close;
-};
 
 struct fileentry
 {
@@ -56,7 +46,6 @@ struct filetable
     bool used;
     uint16_t ch; // clockhand
     struct fileentry fe[MAX_FH];
-    sync_mutex_t felock; // big lock to lock the whole fe table
 };
 
 // PLAN: GRP01 should be replaced by a hashmap once we have more than one handlers
@@ -75,9 +64,7 @@ struct bg_open_param {
     size_t filename_len;
     char filename_term;
     seL4_Word pid;
-    seL4_CPtr vspace;
     seL4_CPtr reply;
-    ut_t* reply_ut;
     int mode;
     bool dir;
 };
@@ -85,20 +72,16 @@ struct bg_open_param {
 struct bg_rw_param {
     bool read; //false = write
     userptr_t buff;
-    dynarray_t* userasarr;
     uint32_t len;
     seL4_Word pid;
-    seL4_CPtr vspace;
     int fh;
     seL4_CPtr reply;
-    ut_t* reply_ut;
 };
 
 struct bg_close_param {
     seL4_Word pid;
     int fh;
     seL4_CPtr reply;
-    ut_t* reply_ut;
 };
 
 struct bg_stat_param {
@@ -106,21 +89,16 @@ struct bg_stat_param {
     size_t filename_len;
     char filename_term;
     seL4_Word pid;
-    seL4_CPtr vspace;
     seL4_CPtr reply;
-    ut_t* reply_ut;
 };
 
 struct bg_readdir_param {
     seL4_Word pid;
-    seL4_CPtr vspace;
     userptr_t buff;
     size_t bufflen;
-    dynarray_t* userasarr;
     size_t pos;
     int fh;
     seL4_CPtr reply;
-    ut_t* reply_ut;
 };
 
 // local variables declaration area
@@ -128,19 +106,20 @@ struct bg_readdir_param {
 struct filetable ft[MAX_PID];
 
 // local functions declaration area
-void send_and_free_reply_cap(seL4_CPtr delegate_ep, ssize_t response, seL4_CPtr reply, ut_t* reply_ut);
-void send_and_free_reply_cap_ex(seL4_CPtr delegate_ep, ssize_t response, size_t extrawords, void* extradata, seL4_CPtr reply, ut_t* reply_ut);
-void bg_fileman_open(seL4_CPtr delegate_ep, void* data);
-void bg_fileman_rw(seL4_CPtr delegate_ep, void* data);
-void bg_fileman_close(seL4_CPtr delegate_ep, void* data);
-void bg_fileman_stat(seL4_CPtr delegate_ep, void* data);
-void bg_fileman_readdir(seL4_CPtr delegate_ep, void* data);
-int fileman_rw_dispatch(bool read, seL4_Word pid, seL4_CPtr vspace, int fh, seL4_CPtr reply, ut_t* reply_ut, userptr_t buff, uint32_t len, dynarray_t* userasarr);
-ssize_t fileman_write_broker(seL4_CPtr delegate_ep, struct filehandler* fh, ssize_t id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len, off_t offset);
-ssize_t fileman_read_broker(seL4_CPtr delegate_ep, dynarray_t* userasarr, struct filehandler* fh, ssize_t id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len, off_t offset);
+void send_and_free_reply_cap(ssize_t response, seL4_CPtr reply);
+void send_and_free_reply_cap_ex(ssize_t response, size_t extrawords, void* extradata, seL4_CPtr reply);
+void bg_fileman_open(void* data);
+void bg_fileman_rw(void* data);
+void bg_fileman_close(void* data);
+void bg_fileman_stat(void* data);
+void bg_fileman_readdir(void* data);
+int fileman_rw_dispatch(bool read, seL4_Word pid, int fh, seL4_CPtr reply, userptr_t buff, uint32_t len);
+ssize_t fileman_write_broker(struct filehandler* fh, ssize_t id, userptr_t ptr, seL4_Word badge, size_t len, off_t offset);
+ssize_t fileman_chunked_write_broker(struct filehandler* fh, ssize_t id, userptr_t ptr, seL4_Word badge, size_t len, off_t offset);
+ssize_t fileman_read_broker(struct filehandler* fh, ssize_t id, userptr_t ptr, seL4_Word badge, size_t len, off_t offset);
 struct filehandler * find_handler(const char* fn);
-char* map_user_string(userptr_t ptr, size_t len, seL4_Word badge, seL4_CPtr vspace, char* originalchar);
-void unmap_user_string_bg(seL4_CPtr ep, char* myptr, size_t len, seL4_Word badge, seL4_CPtr vspace, char originalchar);
+char* map_user_string(userptr_t ptr, size_t len, seL4_Word badge, char* originalchar);
+void unmap_user_string_bg(char* myptr, size_t len, seL4_Word badge, char originalchar);
 int find_unused_slot(struct filetable* pft);
 
 // function definitions area
@@ -179,15 +158,15 @@ bool fileman_init()
     specialhandlers[0].handler.gdent = null_fs_dirent;
     specialhandlers[0].handler.closedir = null_fs_closedir;
 
-    // specialhandlers[1].name = "fake";
-    // specialhandlers[1].handler.open = null_fs_open;
-    // specialhandlers[1].handler.close = null_fs_close;
-    // specialhandlers[1].handler.read = null_fs_read;
-    // specialhandlers[1].handler.write = null_fs_write;
-    // specialhandlers[1].handler.stat = fake_fs_stat;
-    // specialhandlers[1].handler.opendir = fake_fs_opendir;
-    // specialhandlers[1].handler.gdent = fake_fs_dirent;
-    // specialhandlers[1].handler.closedir = null_fs_close;
+    specialhandlers[1].name = "fake";
+    specialhandlers[1].handler.open = fake_fs_open;
+    specialhandlers[1].handler.close = null_fs_close;
+    specialhandlers[1].handler.read = fake_fs_read;
+    specialhandlers[1].handler.write = fake_fs_write;
+    specialhandlers[1].handler.stat = fake_fs_stat;
+    specialhandlers[1].handler.opendir = fake_fs_opendir;
+    specialhandlers[1].handler.gdent = fake_fs_dirent;
+    specialhandlers[1].handler.closedir = null_fs_close;
 
     return true;
 }
@@ -199,18 +178,6 @@ int fileman_create(seL4_Word pid)
         return EBADF;
     if(ft[pid].used)
         return EEXIST;
-
-    // initialize the sync primitives (if not exists)
-    // notification 0 means that we didn't initialize the mutex for this PID before.
-    // because upon SOS startup, we zeroed out the whole table.
-    if(!ft[pid].felock.notification) {
-    seL4_CPtr tmp_ntfn;
-        if(!alloc_retype(&tmp_ntfn, seL4_NotificationObject, seL4_NotificationBits)) {
-            ZF_LOGE("Cannot create notification object.");
-            return ENOMEM;
-        }
-        sync_mutex_init(&ft[pid].felock, tmp_ntfn);
-    }
 
     // empty the file table
     memset(ft[pid].fe, 0, sizeof(ft[pid].fe));
@@ -227,7 +194,7 @@ int fileman_create(seL4_Word pid)
     return 0;
 }
 
-int fileman_open(seL4_Word pid, seL4_CPtr vspace, seL4_CPtr reply, ut_t* reply_ut, userptr_t filename, size_t filename_len, bool dir, int mode)
+int fileman_open(seL4_Word pid, seL4_CPtr reply, userptr_t filename, size_t filename_len, bool dir, int mode)
 {
     // error checking
     // bad pid
@@ -238,7 +205,7 @@ int fileman_open(seL4_Word pid, seL4_CPtr vspace, seL4_CPtr reply, ut_t* reply_u
     struct bg_open_param * param = malloc(sizeof(struct bg_open_param));
     if(!param)
         return ENOMEM * -1;
-    param->filename = map_user_string(filename, filename_len, pid, vspace, &param->filename_term);
+    param->filename = map_user_string(filename, filename_len, pid, &param->filename_term);
     if(!param->filename) {
         free(param);
         return -EFAULT;
@@ -247,15 +214,13 @@ int fileman_open(seL4_Word pid, seL4_CPtr vspace, seL4_CPtr reply, ut_t* reply_u
     param->mode = mode;
     param->dir = dir;
     param->pid = pid;
-    param->vspace = vspace;
     param->reply = reply;
-    param->reply_ut = reply_ut;
 
-    bgworker_enqueue_callback(bg_fileman_open, param);
+    bgworker_enqueue_callback(pid, bg_fileman_open, param);
     return 0;
 }
 
-int fileman_close(seL4_Word pid, seL4_CPtr reply, ut_t* reply_ut, int fh)
+int fileman_close(seL4_Word pid, seL4_CPtr reply, int fh)
 {
     // basic error check
     if((pid >= MAX_PID) || (!ft[pid].used))
@@ -270,23 +235,22 @@ int fileman_close(seL4_Word pid, seL4_CPtr reply, ut_t* reply_ut, int fh)
     param->pid = pid;
     param->fh = fh;
     param->reply = reply;
-    param->reply_ut = reply_ut;
 
-    bgworker_enqueue_callback(bg_fileman_close, param);
+    bgworker_enqueue_callback(pid, bg_fileman_close, param);
     return 0;
 }
 
-int fileman_write(seL4_Word pid, seL4_CPtr vspace, int fh, seL4_CPtr reply, ut_t* reply_ut, userptr_t buff, uint32_t len, dynarray_t* userasarr)
+int fileman_write(seL4_Word pid, int fh, seL4_CPtr reply, userptr_t buff, uint32_t len)
 {
-    return fileman_rw_dispatch(false, pid, vspace, fh, reply, reply_ut, buff, len, userasarr);
+    return fileman_rw_dispatch(false, pid, fh, reply, buff, len);
 }
 
-int fileman_read(seL4_Word pid, seL4_CPtr vspace, int fh, seL4_CPtr reply, ut_t* reply_ut, userptr_t buff, uint32_t len, dynarray_t* userasarr)
+int fileman_read(seL4_Word pid, int fh, seL4_CPtr reply, userptr_t buff, uint32_t len)
 {
-    return fileman_rw_dispatch(true, pid, vspace, fh, reply, reply_ut, buff, len, userasarr);
+    return fileman_rw_dispatch(true, pid, fh, reply, buff, len);
 }
 
-int fileman_rw_dispatch(bool read, seL4_Word pid, seL4_CPtr vspace, int fh, seL4_CPtr reply, ut_t* reply_ut, userptr_t buff, uint32_t len, dynarray_t* userasarr)
+int fileman_rw_dispatch(bool read, seL4_Word pid, int fh, seL4_CPtr reply, userptr_t buff, uint32_t len)
 {
     // error checking
     // bad pid
@@ -303,19 +267,16 @@ int fileman_rw_dispatch(bool read, seL4_Word pid, seL4_CPtr vspace, int fh, seL4
         return ENOMEM * -1;
     param->read = read;
     param->pid = pid;
-    param->vspace = vspace;
     param->fh = fh;
     param->buff = buff;
     param->len = len;
     param->reply = reply;
-    param->reply_ut = reply_ut;
-    param->userasarr = userasarr;
 
-    bgworker_enqueue_callback(bg_fileman_rw, param);
+    bgworker_enqueue_callback(pid, bg_fileman_rw, param);
     return 0;
 }
 
-int fileman_stat(seL4_Word pid, seL4_CPtr vspace, seL4_CPtr reply, ut_t* reply_ut, userptr_t filename, size_t filename_len)
+int fileman_stat(seL4_Word pid, seL4_CPtr reply, userptr_t filename, size_t filename_len)
 {
     if(pid >= MAX_PID)
         return -EINVAL;
@@ -324,7 +285,7 @@ int fileman_stat(seL4_Word pid, seL4_CPtr vspace, seL4_CPtr reply, ut_t* reply_u
     if(!param)
         return -ENOMEM;
     
-    param->filename = map_user_string(filename, filename_len, pid, vspace, &param->filename_term);
+    param->filename = map_user_string(filename, filename_len, pid, &param->filename_term);
     if(!filename) {
         free(param);
         return -EFAULT;
@@ -332,15 +293,13 @@ int fileman_stat(seL4_Word pid, seL4_CPtr vspace, seL4_CPtr reply, ut_t* reply_u
     
     param->filename_len = filename_len;
     param->pid = pid;
-    param->vspace = vspace;
     param->reply = reply;
-    param->reply_ut = reply_ut;
 
-    bgworker_enqueue_callback(bg_fileman_stat, param);
+    bgworker_enqueue_callback(pid, bg_fileman_stat, param);
     return 0;
 }
 
-int fileman_readdir(seL4_Word pid, seL4_CPtr vspace, int fh, seL4_CPtr reply, ut_t* reply_ut, size_t pos, userptr_t buff, size_t bufflen, dynarray_t* userasarr)
+int fileman_readdir(seL4_Word pid, int fh, seL4_CPtr reply, size_t pos, userptr_t buff, size_t bufflen)
 {
     if(pid >= MAX_PID)
         return -EINVAL;
@@ -350,25 +309,22 @@ int fileman_readdir(seL4_Word pid, seL4_CPtr vspace, int fh, seL4_CPtr reply, ut
         return -ENOMEM;
     
     param->pid = pid;
-    param->vspace = vspace;
     param->buff = buff;
     param->bufflen = bufflen;
-    param->userasarr = userasarr;
     param->pos = pos;
     param->fh = fh;
     param->reply = reply;
-    param->reply_ut = reply_ut;
 
-    bgworker_enqueue_callback(bg_fileman_readdir, param);
+    bgworker_enqueue_callback(pid, bg_fileman_readdir, param);
     return 0;
 }
 
-void send_and_free_reply_cap(seL4_CPtr delegate_ep, ssize_t response, seL4_CPtr reply, ut_t* reply_ut)
+void send_and_free_reply_cap(ssize_t response, seL4_CPtr reply)
 {
-    send_and_free_reply_cap_ex(delegate_ep, response, 0, NULL, reply, reply_ut);
+    send_and_free_reply_cap_ex(response, 0, NULL, reply);
 }
 
-void send_and_free_reply_cap_ex(seL4_CPtr delegate_ep, ssize_t response, size_t extrawords, void* extradata, seL4_CPtr reply, ut_t* reply_ut)
+void send_and_free_reply_cap_ex(ssize_t response, size_t extrawords, void* extradata, seL4_CPtr reply)
 {
     ZF_LOGF_IF(extrawords >= seL4_MsgMaxLength, "Extra reply too large");
     seL4_MessageInfo_t reply_msg = seL4_MessageInfo_new(0, 0, 0, 1 + extrawords);
@@ -377,12 +333,10 @@ void send_and_free_reply_cap_ex(seL4_CPtr delegate_ep, ssize_t response, size_t 
         memcpy(seL4_GetIPCBuffer()->msg + 1, extradata, extrawords * sizeof(seL4_Word));
 
     seL4_Send(reply, reply_msg);
-    // delete the reply cap for now (and mark the backing ut as free)
-    delegate_free_cap(delegate_ep, reply, true, true);
-    delegate_free_ut(delegate_ep, reply_ut);
+    delegate_reuse_reply(reply);
 }
 
-void bg_fileman_open(seL4_CPtr delegate_ep, void* data)
+void bg_fileman_open(void* data)
 {
     struct bg_open_param * param = data;
     struct filetable* pft = ft + param->pid;
@@ -390,8 +344,6 @@ void bg_fileman_open(seL4_CPtr delegate_ep, void* data)
     // 0 or more = file handle number
     // negative = negative errno convention
     int ret = 0;
-
-    sync_mutex_lock(&pft->felock);
 
     // find unused slot in the process' file table
     int slot = find_unused_slot(pft);
@@ -406,8 +358,8 @@ void bg_fileman_open(seL4_CPtr delegate_ep, void* data)
 
     // try open
     ssize_t id = param->dir ? 
-        handler->opendir(delegate_ep, param->filename) :
-        handler->open(delegate_ep, param->filename, param->mode);
+        handler->opendir(param->pid, param->filename) :
+        handler->open(param->pid, param->filename, param->mode);
     if(id < 0) {
         // failure. we expect the opener to return our negative errno model.
         ret = id;
@@ -426,14 +378,13 @@ void bg_fileman_open(seL4_CPtr delegate_ep, void* data)
     ret = slot;
 
 finish:
-    unmap_user_string_bg(delegate_ep, param->filename, param->filename_len, param->pid,
-        param->vspace, param->filename_term);
-    sync_mutex_unlock(&pft->felock);
-    send_and_free_reply_cap(delegate_ep, ret, param->reply, param->reply_ut);
-    delegate_free(delegate_ep, param);
+    unmap_user_string_bg(param->filename, param->filename_len, param->pid,
+        param->filename_term);
+    send_and_free_reply_cap(ret, param->reply);
+    free(param);
 }
 
-void bg_fileman_rw(seL4_CPtr delegate_ep, void* data)
+void bg_fileman_rw(void* data)
 {
     struct bg_rw_param * param = data;
     struct filetable* pft = ft + param->pid;
@@ -443,7 +394,6 @@ void bg_fileman_rw(seL4_CPtr delegate_ep, void* data)
     // negative = negative errno convention
     ssize_t ret = 0;
 
-    sync_mutex_lock(&pft->felock);
     if(!pfe->used) {
         ret = EBADF * -1;
         goto finish;
@@ -467,43 +417,40 @@ void bg_fileman_rw(seL4_CPtr delegate_ep, void* data)
 
     // action!
     if(param->read)
-        ret = fileman_read_broker(delegate_ep, param->userasarr, pfe->handler, pfe->id, param->buff, param->pid, param->vspace, param->len, pfe->offset);
+        ret = fileman_read_broker(pfe->handler, pfe->id, param->buff, param->pid, param->len, pfe->offset);
     else
-        ret = fileman_write_broker(delegate_ep, pfe->handler, pfe->id, param->buff, param->pid, param->vspace, param->len, pfe->offset);
+        ret = fileman_write_broker(pfe->handler, pfe->id, param->buff, param->pid, param->len, pfe->offset);
 
     // increment offset if we got a successful read!
     if(ret > 0) 
         pfe->offset += ret;
 
 finish:
-    sync_mutex_unlock(&pft->felock);
-    send_and_free_reply_cap(delegate_ep, ret, param->reply, param->reply_ut);
-    delegate_free(delegate_ep, param);
+    send_and_free_reply_cap(ret, param->reply);
+    free(param);
 }
 
-void bg_fileman_close(seL4_CPtr delegate_ep, void* data)
+void bg_fileman_close(void* data)
 {
     struct bg_close_param * param = data;
     struct filetable* pft = ft + param->pid;
     struct fileentry* pfe = pft->fe + param->fh;
 
-    sync_mutex_lock(&pft->felock);
     if(pfe->used) {
         if(pfe->dir)
-            pfe->handler->closedir(delegate_ep, pfe->id);
+            pfe->handler->closedir(param->pid, pfe->id);
         else
-            pfe->handler->close(delegate_ep, pfe->id);
+            pfe->handler->close(param->pid, pfe->id);
         
         pfe->used = false;
     }
     
     //finish:
-    sync_mutex_unlock(&pft->felock);
-    send_and_free_reply_cap(delegate_ep, 1, param->reply, param->reply_ut);
-    delegate_free(delegate_ep, param);
+    send_and_free_reply_cap(1, param->reply);
+    free(param);
 }
 
-void bg_fileman_stat(seL4_CPtr delegate_ep, void* data)
+void bg_fileman_stat(void* data)
 {
     struct bg_stat_param * param = data;
     struct filehandler * handler = find_handler(param->filename);
@@ -511,20 +458,20 @@ void bg_fileman_stat(seL4_CPtr delegate_ep, void* data)
         sos_stat_t st;
         seL4_Word matcher[DIV_ROUND_UP_CEXPR(sizeof(sos_stat_t), sizeof(seL4_Word))];
     } target = {0};
-    ssize_t err = handler->stat(delegate_ep, param->filename, &target.st);
+    ssize_t err = handler->stat(param->pid, param->filename, &target.st);
 
 finish:
-    unmap_user_string_bg(delegate_ep, param->filename, param->filename_len, param->pid,
-        param->vspace, param->filename_term);
+    unmap_user_string_bg(param->filename, param->filename_len, param->pid,
+        param->filename_term);
     if(err)
-        send_and_free_reply_cap(delegate_ep, err, param->reply, param->reply_ut);
+        send_and_free_reply_cap(err, param->reply);
     else
-        send_and_free_reply_cap_ex(delegate_ep, 1, sizeof(target)/sizeof(seL4_Word), target.matcher,
-            param->reply, param->reply_ut);
-    delegate_free(delegate_ep, param);
+        send_and_free_reply_cap_ex(1, sizeof(target)/sizeof(seL4_Word), target.matcher,
+            param->reply);
+    free(param);
 }
 
-void bg_fileman_readdir(seL4_CPtr delegate_ep, void* data)
+void bg_fileman_readdir(void* data)
 {
     struct bg_readdir_param * param = data;
     struct filetable* pft = ft + param->pid;
@@ -534,7 +481,6 @@ void bg_fileman_readdir(seL4_CPtr delegate_ep, void* data)
     // negative = negative errno convention
     ssize_t ret = 0;
 
-    sync_mutex_lock(&pft->felock);
     if(!pfe->used) {
         ret = EBADF * -1;
         goto finish;
@@ -544,7 +490,7 @@ void bg_fileman_readdir(seL4_CPtr delegate_ep, void* data)
         goto finish;
     }
 
-    const char* dent = pfe->handler->gdent(delegate_ep, pfe->id, param->pos);
+    const char* dent = pfe->handler->gdent(param->pid, pfe->id, param->pos);
 
     // NULL file name? "return" 0!
     if(!dent)
@@ -555,8 +501,7 @@ void bg_fileman_readdir(seL4_CPtr delegate_ep, void* data)
     ret = MIN(strlen(dent) + 1, param->bufflen);
 
     // copy to the pointer given to user
-    userptr_write_state_t it = delegate_userptr_write_start(delegate_ep, 
-        param->buff, ret, param->userasarr, param->pid, param->vspace);
+    userptr_write_state_t it = delegate_userptr_write_start(param->buff, ret, param->pid);
 
     if(!it.curr) {
         ret = -EFAULT;
@@ -568,39 +513,68 @@ void bg_fileman_readdir(seL4_CPtr delegate_ep, void* data)
     while(it.curr) {
         memcpy((void*)it.curr, dent, it.remcurr);
         dent += it.remcurr;
-        if(!delegate_userptr_write_next(delegate_ep, &it)) {
+        if(!delegate_userptr_write_next(&it)) {
             ret = -EFAULT;
             break;
         }
     }
 
-    delegate_userptr_unmap(delegate_ep, startptr);
+    delegate_userptr_unmap(startptr);
 
 finish:
-    sync_mutex_unlock(&pft->felock);
-    send_and_free_reply_cap(delegate_ep, ret, param->reply, param->reply_ut);
-    delegate_free(delegate_ep, param);
+    send_and_free_reply_cap(ret, param->reply);
+    free(param);
 }
 
-ssize_t fileman_write_broker(seL4_CPtr delegate_ep, struct filehandler* fh, ssize_t id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len, off_t offset)
+ssize_t fileman_write_broker(struct filehandler* fh, ssize_t id, userptr_t ptr, seL4_Word badge, size_t len, off_t offset)
 {
-    void* buff = delegate_userptr_read(delegate_ep, ptr, len, badge, vspace);
-    if(!buff)
-        return EFAULT * -1;
+    void* buff = delegate_userptr_read(ptr, len, badge);
+    if(!buff) {
+        // try chunked write
+        return fileman_chunked_write_broker(fh, id, ptr, badge, len, offset);
+    }
     
-    ssize_t ret = fh->write(delegate_ep, id, buff, offset, len);
+    ssize_t ret = fh->write(badge, id, buff, offset, len);
 
-    delegate_userptr_unmap(delegate_ep, buff);
+    delegate_userptr_unmap(buff);
 
     return ret;
 }
 
-ssize_t fileman_read_broker(seL4_CPtr delegate_ep, dynarray_t* userasarr, struct filehandler* fh, ssize_t id, userptr_t ptr, seL4_Word badge, seL4_CPtr vspace, size_t len, off_t offset)
+ssize_t fileman_chunked_write_broker(struct filehandler* fh, ssize_t id, userptr_t ptr, seL4_Word badge, size_t len, off_t offset)
+{
+    ssize_t ret = 0;
+    while(len) {
+        size_t toread = MIN(READ_PAGE_CHUNK * PAGE_SIZE_4K - (ptr % PAGE_SIZE_4K), len);
+        void* buff = delegate_userptr_read(ptr, toread, badge);
+        if(!buff) {
+            if(!ret)
+                ret = -EFAULT;
+            break;
+        }
+        ssize_t written = fh->write(badge, id, buff, offset, toread);
+
+        delegate_userptr_unmap(buff);
+
+        // advance position
+        ret += written;
+        ptr += written;
+        len -= written;
+        offset += written;
+
+        // maybe EOF reached?
+        if(written < toread)
+            break;
+    }
+    return ret;
+}
+
+ssize_t fileman_read_broker(struct filehandler* fh, ssize_t id, userptr_t ptr, seL4_Word badge, size_t len, off_t offset)
 {
     if(!len)
         return 0;
 
-    userptr_write_state_t it = delegate_userptr_write_start(delegate_ep, ptr, len, userasarr, badge, vspace);
+    userptr_write_state_t it = delegate_userptr_write_start(ptr, len, badge);
     if(!it.curr)
         return -EFAULT;
     
@@ -608,7 +582,7 @@ ssize_t fileman_read_broker(seL4_CPtr delegate_ep, dynarray_t* userasarr, struct
     void* startptr = (void*)it.curr;
 
     while(it.curr) {
-        ssize_t rd = fh->read(delegate_ep, id, (void*)it.curr, ret + offset, it.remcurr);
+        ssize_t rd = fh->read(badge, id, (void*)it.curr, ret + offset, it.remcurr);
         if(rd < 0) {
             ZF_LOGE("Filesystem returned an error");
             ret = -EIO;
@@ -619,14 +593,14 @@ ssize_t fileman_read_broker(seL4_CPtr delegate_ep, dynarray_t* userasarr, struct
             // EOF!
             break;
         
-        if(!delegate_userptr_write_next(delegate_ep, &it)) {
+        if(!delegate_userptr_write_next(&it)) {
             ZF_LOGE("Error incrementing pointer when handling user read request.");
             ret = -EIO;
             break;
         }
     }
 
-    delegate_userptr_unmap(delegate_ep, startptr);
+    delegate_userptr_unmap(startptr);
     
     return ret;
 }
@@ -641,10 +615,15 @@ struct filehandler * find_handler(const char* fn)
     return &defaulthandler;
 }
 
-char* map_user_string(userptr_t ptr, size_t len, seL4_Word badge, seL4_CPtr vspace, char* originalchar)
+char* map_user_string(userptr_t ptr, size_t len, seL4_Word badge, char* originalchar)
 {
+    if(len >= MAX_FILENAME) {
+        // flat out refuse if filename is too long!
+        ZF_LOGI("Refused to service very long file name.");
+        return NULL;
+    }
     // WARNING! this function is meant to be called from main thread
-    char* ret = userptr_read(ptr, len + 1, badge, vspace);
+    char* ret = userptr_read(ptr, len + 1, badge);
     if(!ret)
         return ret;
     // set last char to NULL to ensure safety
@@ -653,11 +632,11 @@ char* map_user_string(userptr_t ptr, size_t len, seL4_Word badge, seL4_CPtr vspa
     return ret;
 }
 
-void unmap_user_string_bg(seL4_CPtr ep, char* myptr, size_t len, seL4_Word badge, seL4_CPtr vspace, char originalchar)
+void unmap_user_string_bg(char* myptr, size_t len, seL4_Word badge, char originalchar)
 {
     // WARNING! this function is meant to be called from background thread
     myptr[len] = originalchar;
-    delegate_userptr_unmap(ep, myptr);
+    delegate_userptr_unmap(myptr);
 }
 
 int find_unused_slot(struct filetable* pft)

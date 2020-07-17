@@ -40,11 +40,11 @@ int sos_libnfs_pread_async(struct nfsfh *nfsfh, uint64_t offset,
 int sos_libnfs_pwrite_async(struct nfsfh *nfsfh, uint64_t offset, 
     uint64_t count, const void *buf, nfs_cb cb, void *private_data);
 
+int sos_libnfs_close_async(struct nfsfh *nfsfh, nfs_cb cb, void *private_data);
+
 int sos_libnfs_stat_async(const char *path, nfs_cb cb, void *private_data);
 
 int sos_libnfs_opendir_async(const char *path, nfs_cb cb, void *private_data);
-
-int sos_libnfs_close_async(struct nfsfh *nfsfh, nfs_cb cb, void *private_data);
 
 const char* sos_libnfs_readdir(struct nfsdir *nfsdir, size_t pos);
 

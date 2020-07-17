@@ -36,7 +36,9 @@ int fh;
 void ttyout_init(void)
 {
     /* Perform any initialisation you require here */
+    sos_debug_printf("ttyout_init\n");
     fh = open("console", O_WRONLY);
+    sos_debug_printf("open got %d\n", fh);
 }
 
 size_t sos_debug_print(const void *vData, size_t count)
