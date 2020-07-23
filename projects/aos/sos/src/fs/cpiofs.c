@@ -92,13 +92,15 @@ ssize_t cpio_fs_stat(seL4_Word pid, char* path, sos_stat_t* out) {
 
 ssize_t cpio_fs_opendir(seL4_Word pid, char* path) {
     if((strcmp(path, "") == 0) || (strcmp(path, "/") == 0)) {
-        if(!dirread) 
+        if(!dirread) {
             cpio_ls(_cpio_archive, cpio_len, dirent, sizeof(dirent));
-        // clean the delimiter
-        for(int i=0; i<MAX_DIRENT; ++i) {
-            if(dirent[i][0] == 0) {
-                dirent[i] = 0;
-                break;
+            dirread = true;
+            // clean the delimiter
+            for(int i=0; i<MAX_DIRENT; ++i) {
+                if(dirent[i][0] == 0) {
+                    dirent[i] = 0;
+                    break;
+                }
             }
         }
         return MAX_FILES;
