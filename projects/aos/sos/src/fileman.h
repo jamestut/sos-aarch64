@@ -67,7 +67,9 @@ bool fileman_init();
 int fileman_create(seL4_Word pid);
 
 // free the file table of given pid.
-void fileman_destroy(seL4_Word pid);
+// @return false if there is a pending IO. Upon IO completion, main will be called
+// to clear the remaining pieces. true otherwise.
+bool fileman_destroy(seL4_Word pid);
 
 // get the handler functions appropriate for the file name
 struct filehandler* find_handler(const char* fn);

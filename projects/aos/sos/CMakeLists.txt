@@ -19,6 +19,10 @@ config_string(SosGateway SOS_GATEWAY "Gateway IP address" DEFAULT "192.168.168.1
 
 config_string(SosFrameLimit SOS_FRAME_LIMIT "Frame table frame limit" UNQUOTE DEFAULT "0ul")
 
+config_string(SosUseFakePageFile SOS_FAKE_PF "Use fake page file" UNQUOTE DEFAULT "0ul")
+
+config_string(SosUseLocalFS SOS_LOCAL_FS "Use local FS on CPIO instead of NFS" UNQUOTE DEFAULT "0ul")
+
 add_config_library(sos "${configure_string}")
 
 # warn about everything

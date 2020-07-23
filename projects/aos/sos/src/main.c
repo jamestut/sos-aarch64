@@ -10,6 +10,7 @@
  * @TAG(DATA61_GPL)
  */
 #include <autoconf.h>
+#include <sos/gen_config.h>
 #include <utils/util.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -738,9 +739,17 @@ NORETURN void *main_continued(UNUSED void *arg)
     // init file systems
     console_fs_init();
     cpio_fs_init();
-    // grp01_nfs_init();
-    // fake_fs_init(0xA00000);
-    // frame_table_init_page_file();
+
+    #if CONFIG_SOS_FAKE_PF > 0ul
+    fake_fs_init(0xA00000);
+    #endif
+
+    #if CONFIG_SOS_LOCAL_FS > 0ul
+    #else
+    grp01_nfs_init();
+    #endif
+    
+    frame_table_init_page_file();
 
     /* Start the user application */
     printf("Start first process\n");

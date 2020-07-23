@@ -1,10 +1,10 @@
+#include <sos/gen_config.h>
 #include <errno.h>
 #include <stdbool.h>
 #include <string.h>
 #include <stdlib.h>
 #include <utils/zf_log.h>
 #include <utils/zf_log_if.h>
-#include <sync/mutex.h>
 #include <cspace/cspace.h>
 #include <sys/types.h>
 
@@ -26,8 +26,6 @@
 #define MAX_FH  128
 #define SPECIAL_HANDLERS 2
 #define READ_PAGE_CHUNK 2
-
-#define CPIO_ROOTFS
 
 // WARNING! double eval!
 #define DIV_ROUND_UP_CEXPR(n,d) \
@@ -140,7 +138,7 @@ bool fileman_init()
     nullhandler.gdent = null_fs_dirent;
     nullhandler.closedir = null_fs_closedir;
 
-    #ifdef CPIO_ROOTFS
+    #if CONFIG_SOS_LOCAL_FS > 0ul
     defaulthandler.open = cpio_fs_open;
     defaulthandler.close = cpio_fs_close;
     defaulthandler.read = cpio_fs_read;
@@ -162,6 +160,7 @@ bool fileman_init()
     
 
     // install special handlers (console)
+    memset(specialhandlers, 0, sizeof(specialhandlers));
     specialhandlers[0].name = "console";
     specialhandlers[0].handler.open = console_fs_open;
     specialhandlers[0].handler.close = console_fs_close;
@@ -172,6 +171,7 @@ bool fileman_init()
     specialhandlers[0].handler.gdent = null_fs_dirent;
     specialhandlers[0].handler.closedir = null_fs_closedir;
 
+    #if CONFIG_SOS_FAKE_PF > 0ul
     specialhandlers[1].name = "fake";
     specialhandlers[1].handler.open = fake_fs_open;
     specialhandlers[1].handler.close = null_fs_close;
@@ -181,6 +181,7 @@ bool fileman_init()
     specialhandlers[1].handler.opendir = fake_fs_opendir;
     specialhandlers[1].handler.gdent = fake_fs_dirent;
     specialhandlers[1].handler.closedir = null_fs_close;
+    #endif
 
     return true;
 }
@@ -622,6 +623,8 @@ ssize_t fileman_read_broker(struct filehandler* fh, ssize_t id, userptr_t ptr, s
 struct filehandler * find_handler(const char* fn)
 {
     for(int i=0; i<SPECIAL_HANDLERS; ++i) {
+        if(!specialhandlers[i].name)
+            break;
         if(strcmp(fn, specialhandlers[i].name) == 0) 
             return &specialhandlers[i].handler;
     }
