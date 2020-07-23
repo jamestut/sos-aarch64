@@ -82,7 +82,7 @@ struct bookkeeping {
 struct bookkeeping bk[MAX_PID];
 
 extern dynarray_t scratchas;
-extern sync_mutex_t scratch_lock;
+extern seL4_CPtr scratch_mtx;
 
 void grp01_map_bookkeep_init()
 {
@@ -677,7 +677,7 @@ void* userptr_read(userptr_t src, size_t len, seL4_Word badge)
     size_t pagecount = ROUND_UP(lennet - 1, PAGE_SIZE_4K) / PAGE_SIZE_4K;
     
     // check if we have enough scratch vmem to handle this
-    sync_mutex_lock(&scratch_lock);
+    seL4_Wait(scratch_mtx, NULL);
     if(scratchas.used == 0) {
         // check if our entire addrspace can be used to fit this request!
         if(lennet < (VMEM_TOP - SOS_SCRATCH))
@@ -710,7 +710,7 @@ void* userptr_read(userptr_t src, size_t len, seL4_Word badge)
             ret = 0;
         }
     }
-    sync_mutex_unlock(&scratch_lock);
+    seL4_Signal(scratch_mtx);
 
     if(!ret)
         return NULL;
@@ -821,12 +821,12 @@ void* userptr_read(userptr_t src, size_t len, seL4_Word badge)
         ZF_LOGF_IF(grp01_unmap_frame(0, curras.begin, curras.end, false) != seL4_NoError, 
             "Error unmapping scratch frame");
         // and remove the AS
-        sync_mutex_lock(&scratch_lock);
+        seL4_Wait(scratch_mtx, NULL);
         // find the index again, as our scratch AS might be moved around while we didn't lock the AS
         int currasidx = addrspace_find(&scratchas, curras.begin);
         ZF_LOGF_IF(currasidx < 0, "Got invalid scratch AS.");
         addrspace_remove(&scratchas, currasidx);
-        sync_mutex_unlock(&scratch_lock);
+        seL4_Signal(scratch_mtx);
         return 0;
     }
 
@@ -877,7 +877,7 @@ userptr_write_state_t userptr_write_start(userptr_t src, size_t len, seL4_Word b
 
     // at this point, the given address range should be valid.
     // now create a scratch mapping
-    sync_mutex_lock(&scratch_lock);
+    seL4_Wait(scratch_mtx, NULL);
     // check if we have enough scratch vmem to handle this
     if(scratchas.used == 0) {
         // check if our entire addrspace can be used to fit this request!
@@ -905,7 +905,7 @@ userptr_write_state_t userptr_write_start(userptr_t src, size_t len, seL4_Word b
             ret.curr = 0;
         }
     }
-    sync_mutex_unlock(&scratch_lock);
+    seL4_Signal(scratch_mtx);
 
     // setup offset and remaining bytes
     ret.curr += src % PAGE_SIZE_4K;
@@ -922,11 +922,11 @@ userptr_write_state_t userptr_write_start(userptr_t src, size_t len, seL4_Word b
         // failed. remove the AS.
         // we assume that the frame is not mapped to SOS at it returns an error!
         // however, it might be mapped to user's tho
-        sync_mutex_lock(&scratch_lock);
+        seL4_Wait(scratch_mtx, NULL);
         int asidx = addrspace_find(&scratchas, scratch.begin);
         ZF_LOGF_IF(asidx < 0, "Scratch map not found.");
         addrspace_remove(&scratchas, asidx);
-        sync_mutex_unlock(&scratch_lock);
+        seL4_Signal(scratch_mtx);
 
         ret.curr = 0;
     }
@@ -974,7 +974,7 @@ void userptr_unmap(void* sosaddr)
 {
     assert_main_thread();
 
-    sync_mutex_lock(&scratch_lock);
+    seL4_Wait(scratch_mtx, NULL);
     int idx = addrspace_find(&scratchas, (uintptr_t)sosaddr);
     if(idx >= 0) {
         addrspace_t* as = (addrspace_t*)scratchas.data + idx;
@@ -982,7 +982,7 @@ void userptr_unmap(void* sosaddr)
             "Error unmapping scratch frame");
         addrspace_remove(&scratchas, idx);
     }
-    sync_mutex_unlock(&scratch_lock);
+    seL4_Signal(scratch_mtx);
 }
 
 bool userptr_single_map(uintptr_t local, pd_indices_t useridx, 

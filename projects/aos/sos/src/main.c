@@ -108,7 +108,7 @@ cspace_t cspace;
 /* scratch address space */
 dynarray_t scratchas;
 // lock for both scratchas itself and when mapping/unmapping
-sync_mutex_t scratch_lock;
+seL4_CPtr scratch_mtx;
 
 static seL4_CPtr sched_ctrl_start;
 static seL4_CPtr sched_ctrl_end;
@@ -678,13 +678,11 @@ void scratchas_init(void)
     // preallocate scratchas w/ the size of background worker threads, so that we don't have to depend on
     // the thread safety of malloc
     dynarray_init(&scratchas, sizeof(addrspace_t));
-    // TODO: GRP01: make thread safe
-    ZF_LOGF_IF(!dynarray_resize(&scratchas, 8), "Cannot allocate array for scratch address space.");
+    ZF_LOGF_IF(!dynarray_resize(&scratchas, MAX_PID), "Cannot allocate array for scratch address space.");
     // lock for scratch space
-    seL4_CPtr ntfn;
-    ut_t* ntfn_ut = alloc_retype(&ntfn, seL4_NotificationObject, seL4_NotificationBits);
+    ut_t* ntfn_ut = alloc_retype(&scratch_mtx, seL4_NotificationObject, seL4_NotificationBits);
     ZF_LOGF_IF(!ntfn_ut, "Cannot allocate notification object for scratch locker.");
-    sync_mutex_init(&scratch_lock, ntfn);
+    seL4_Signal(scratch_mtx);
 }
 
 NORETURN void *main_continued(UNUSED void *arg)
