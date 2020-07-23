@@ -739,9 +739,10 @@ NORETURN void *main_continued(UNUSED void *arg)
 
     // init file systems
     console_fs_init();
-    grp01_nfs_init();
+    cpio_fs_init();
+    // grp01_nfs_init();
     // fake_fs_init(0xA00000);
-    frame_table_init_page_file();
+    // frame_table_init_page_file();
 
     /* Start the user application */
     printf("Start first process\n");

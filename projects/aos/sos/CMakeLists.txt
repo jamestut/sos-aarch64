@@ -80,6 +80,7 @@ add_executable(
     src/proctable.c
     # GRP01: qemu
     src/fs/pl011console.c
+    src/fs/cpiofs.c
 )
 target_include_directories(sos PRIVATE "include" "../libsosapi/include")
 target_link_libraries(

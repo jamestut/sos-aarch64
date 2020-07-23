@@ -13,6 +13,7 @@
 #include "fs/nullfile.h"
 #include "fs/nfs.h"
 #include "fs/fake.h"
+#include "fs/cpiofs.h"
 #include "bgworker.h"
 #include "ut.h"
 #include "grp01.h"
@@ -25,6 +26,8 @@
 #define MAX_FH  128
 #define SPECIAL_HANDLERS 2
 #define READ_PAGE_CHUNK 2
+
+#define CPIO_ROOTFS
 
 // WARNING! double eval!
 #define DIV_ROUND_UP_CEXPR(n,d) \
@@ -137,6 +140,16 @@ bool fileman_init()
     nullhandler.gdent = null_fs_dirent;
     nullhandler.closedir = null_fs_closedir;
 
+    #ifdef CPIO_ROOTFS
+    defaulthandler.open = cpio_fs_open;
+    defaulthandler.close = cpio_fs_close;
+    defaulthandler.read = cpio_fs_read;
+    defaulthandler.write = cpio_fs_write;
+    defaulthandler.stat = cpio_fs_stat;
+    defaulthandler.opendir = cpio_fs_opendir;
+    defaulthandler.gdent = cpio_fs_dirent;
+    defaulthandler.closedir = cpio_fs_closedir;
+    #else
     defaulthandler.open = grp01_nfs_open;
     defaulthandler.close = grp01_nfs_close;
     defaulthandler.read = grp01_nfs_read;
@@ -145,6 +158,7 @@ bool fileman_init()
     defaulthandler.opendir = grp01_nfs_opendir;
     defaulthandler.gdent = grp01_nfs_dirent;
     defaulthandler.closedir = grp01_nfs_closedir;
+    #endif
     
 
     // install special handlers (console)
