@@ -6,6 +6,10 @@
 
 extern uintptr_t main_ipc_buff;
 
-void assert_main_thread(void) {
+inline static void assert_main_thread(void) {
     assert(seL4_GetIPCBuffer() == main_ipc_buff);
+}
+
+inline static void assert_non_main_thread(void) {
+    assert(seL4_GetIPCBuffer() != main_ipc_buff);
 }

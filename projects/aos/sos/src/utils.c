@@ -46,3 +46,12 @@ ut_t *alloc_retype(seL4_CPtr *cptr, seL4_Word type, size_t size_bits)
 
     return ut;
 }
+
+void cap_ut_dealloc(seL4_CPtr *cap, ut_t** ut)
+{
+    cspace_delete(&cspace, *cap);
+    cspace_free_slot(&cspace, *cap);
+    *cap = 0;
+    ut_free(*ut);
+    *ut = NULL;
+}

@@ -10,6 +10,7 @@
 #include "../utils.h"
 #include "../vmem_layout.h"
 #include "../proctable.h"
+#include "../threadassert.h"
 #include <sync/mutex.h>
 #include <sys/types.h>
 #include <utils/zf_log_if.h>
@@ -89,12 +90,11 @@ void grp01_map_bookkeep_init()
     memset(bk, 0, sizeof(bk));
 }
 
-bool grp01_map_init(seL4_Word badge, seL4_CPtr vspace)
+void grp01_map_init(seL4_Word badge, seL4_CPtr vspace)
 {
     // check if badge is valid :)
     // badge == 0 means we're managing SOS' (not used for now)
-    if(badge >= MAX_PID)
-        return false;
+    assert(badge < MAX_PID);
     
     // check if this vspace is not managed by us yet. also find the slot.
     struct bookkeeping* lbk = bk + badge;

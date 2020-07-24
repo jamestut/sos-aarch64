@@ -176,12 +176,20 @@ int sos_process_delete(pid_t pid)
 
 pid_t sos_my_id(void)
 {
-    return sos_sys_not_implemented();
+    seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, 1);
+    seL4_SetMR(0, SOS_SYSCALL_MY_ID);
+    seL4_Call(SOS_IPC_EP_CAP, msginfo);
+    return seL4_GetMR(0);
 }
 
 int sos_process_status(sos_process_t *processes, unsigned max)
 {
-    return sos_sys_not_implemented();
+    seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, 3);
+    seL4_SetMR(0, SOS_SYSCALL_LIST_PROC);
+    seL4_SetMR(1, processes);
+    seL4_SetMR(2, max);
+    seL4_Call(SOS_IPC_EP_CAP, msginfo);
+    return seL4_GetMR(0);
 }
 
 pid_t sos_process_wait(pid_t pid)

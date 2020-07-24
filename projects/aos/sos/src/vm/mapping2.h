@@ -36,7 +36,7 @@ typedef struct {
 void grp01_map_bookkeep_init(void);
 
 // Initialize a bookeeping structure for mapping frames.
-bool grp01_map_init(seL4_Word badge, seL4_CPtr vspace);
+void grp01_map_init(seL4_Word badge, seL4_CPtr vspace);
 
 // destroy the bookeeping structure for mapping frames, as well as destroying 
 // the intermediate page tables created by the grp01_map_frame function.

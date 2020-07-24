@@ -20,9 +20,12 @@ typedef struct {
     seL4_CPtr vspace;
 
     frame_ref_t ipc_buffer_frame;
+    seL4_CPtr ipc_buffer_mapped_cap;
 
     ut_t *sched_context_ut;
     seL4_CPtr sched_context;
+
+    seL4_CPtr fault_ep;
 
     cspace_t cspace;
 
@@ -30,3 +33,7 @@ typedef struct {
 } proctable_t;
 
 extern proctable_t proctable[MAX_PID];
+
+int find_free_pid(void);
+
+void set_pid_state(seL4_Word pid, bool active);

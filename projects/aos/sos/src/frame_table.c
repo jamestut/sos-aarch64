@@ -122,10 +122,6 @@ static struct {
 #define FRAME_PAGE_CAP(idx) (frame_table.cap_frames[(idx)/PAGE_CAP_CONT_CAPACITY].\
     data[(idx)%PAGE_CAP_CONT_CAPACITY])
 
-// bitmap represented as pointer to uint64_t
-#define GET_BMP(arr, idx) (((arr)[(idx)/64] & (1ULL << ((idx)%64ULL))) && true)
-#define TOGGLE_BMP(arr, idx) ((arr)[(idx)/64] ^= (1ULL << ((idx)%64ULL)))
-
 #define GET_FRAME_CAP_STATUS(idx) (GET_BMP(frame_table.cap_frames[(idx)/PAGE_CAP_CONT_CAPACITY].\
     bmpfree, (idx)%PAGE_CAP_CONT_CAPACITY))
 #define TOGGLE_FRAME_CAP_FREE(idx) (TOGGLE_BMP(frame_table.cap_frames[(idx)/PAGE_CAP_CONT_CAPACITY].\

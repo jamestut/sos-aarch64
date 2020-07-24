@@ -28,14 +28,13 @@ long sys_rt_sigprocmask(va_list ap)
 
 long sys_gettid(va_list ap)
 {
-    /* return dummy for now */
-    return 0;
+    /* SOS is single threaded, so tid == pid */
+    return sos_my_id();
 }
 
 long sys_getpid(va_list ap)
 {
-    /* assuming process IDs are the same as thread IDs*/
-    return 0;
+    return sos_my_id();
 }
 
 long sys_exit(va_list ap)
