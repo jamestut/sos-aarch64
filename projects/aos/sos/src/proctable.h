@@ -37,6 +37,11 @@ typedef struct {
 
     dynarray_t as;
 
+    // infos that we'll be giving @ process_status
+    size_t file_size;
+    char command[N_NAME];
+    size_t start_msec;
+
     struct {
         seL4_Word parent_pid;
         char* filename;

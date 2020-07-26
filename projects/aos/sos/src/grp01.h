@@ -6,6 +6,7 @@
 // contains definitions for group01's SOS assignment
 
 // max no. of processes supported
+// TODO: GRP01: move to CMake
 #define MAX_PID             128
 
 // max char in filename, including NULL terminator

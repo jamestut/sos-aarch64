@@ -91,7 +91,6 @@ static int load_segment_into_vspace(seL4_Word badge, seL4_CPtr loadee, char *src
             return -1;
         }
 
-        // TODO: GRP01: delegate all mapping operations to main thread.
         /* map the frame into the loadee address space */
         err = delegate_map_frame(badge, frame, true, false, loadee_vaddr, permissions,
                         seL4_ARM_Default_VMAttributes);

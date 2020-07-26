@@ -7,6 +7,7 @@
 #include "vm/mapping2.h"
 #include "elfload.h"
 #include "delegate.h"
+#include <clock/clock.h>
 #include <stdbool.h>
 #include <aos/debug.h>
 #include <elf/elf.h>
@@ -187,6 +188,11 @@ int create_process(seL4_Word parent_pid, char *app_name)
     pt->loader_state.filename = app_name;
     pt->loader_state.parent_pid = parent_pid;
 
+    // fill in some info
+    pt->start_msec = get_time();
+    strncpy(pt->command, app_name, N_NAME);
+    pt->command[N_NAME - 1] = 0;
+
     // create background worker for this app.
     // this background worker's thread will be kept for SOS' lifetime
     bgworker_create(ptidx);
@@ -307,6 +313,7 @@ bool start_process_load_elf(seL4_Word new_pid)
     ssize_t ioerr = fh.fh->stat(parent_pid, pt->loader_state.filename, &filestat);
     if(ioerr < 0 || !filestat.st_size)
         return false;
+    pt->file_size = filestat.st_size;
 
     if(filestat.st_size > MAX_FILE_BACK_SIZE) {
         ZF_LOGE("ELF file too large.");
@@ -349,7 +356,6 @@ bool start_process_load_elf(seL4_Word new_pid)
         goto error_02;
 
     // load finishes. unmap scratch space
-    // TODO: GRP01: ensure that this also unmaps the backed frames
     fh.fh->close(parent_pid, fh.id);
     delegate_free_sos_scratch(scratch_base);
 
@@ -363,7 +369,6 @@ bool start_process_load_elf(seL4_Word new_pid)
     return err == seL4_NoError;
 
 error_02: // go here if error after allocating scratch
-    // TODO: GRP01: ensure that this also unmaps the backed frames
     delegate_free_sos_scratch(scratch_base);
 error_01: // go here if error after opening file
     fh.fh->close(parent_pid, fh.id);
@@ -436,6 +441,8 @@ void destroy_process(seL4_CPtr pid)
     if(pt->loader_state.filename)
         memset(&pt->loader_state, 0, sizeof(pt->loader_state));
 
+    *pt->command = 0;
+    pt->file_size = 0;
     dynarray_destroy(&pt->as);
     set_pid_state(pid, false);
 }

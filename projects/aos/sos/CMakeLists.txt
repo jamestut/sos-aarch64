@@ -87,6 +87,7 @@ add_executable(
     src/fs/cpiofs.c
     # GRP01: M6
     src/procman.c
+    src/procsyscall.c
 )
 target_include_directories(sos PRIVATE "include" "../libsosapi/include")
 target_link_libraries(

@@ -73,6 +73,7 @@
 #include "proctable.h"
 // GRP01: M6
 #include "procman.h"
+#include "procsyscall.h"
 
 #include <aos/vsyscall.h>
 
@@ -198,6 +199,14 @@ bool handle_syscall(seL4_Word badge, seL4_Word msglen, seL4_CPtr reply)
     
     case SOS_SYSCALL_TIMESTAMP:
         handler_ret = ts_get_timestamp();
+        break;
+
+    case SOS_SYSCALL_MY_ID:
+        handler_ret = badge;
+        break;
+
+    case SOS_SYSCALL_LIST_PROC:
+        handler_ret = proc_list(badge, seL4_GetMR(1), seL4_GetMR(2));
         break;
 
     case SOS_SYSCALL_UNIMPLEMENTED:
@@ -450,6 +459,7 @@ NORETURN void *main_continued(UNUSED void *arg)
     // fill in SOS' own process data!
     set_pid_state(0, true);
     proctable[0].vspace = seL4_CapInitThreadVSpace;
+    strncpy(proctable[0].command, "<sos system>", N_NAME);
 
     // GRP01: init OS parts here
     delegate_init(&cspace, ipc_ep);
@@ -503,7 +513,6 @@ NORETURN void *main_continued(UNUSED void *arg)
     /* Start the user application */
     printf("Start first process\n");
 
-    // TODO: GRP01: ensure PID starts from 1, not 0!
     int first_pid = create_process(0, FIRST_PROC_NAME);
     ZF_LOGF_IF(first_pid <= 0, "Failed to bootstrap initial process.");
     bgworker_enqueue_callback(0, start_first_process, proctable + first_pid);
