@@ -7,12 +7,18 @@
 #include "ut.h"
 #include "frame_table.h"
 #include "grp01.h"
+#include "vm/addrspace.h"
+
+enum procstate {
+    PROC_STATE_CONSTRUCTING = 0x01,
+    PROC_STATE_PENDING_KILL = 0x02
+};
 
 // contains the definition of the process table structure
 // so that we don't have to pass a bazilion of parameters!
-
 typedef struct {
-    bool active;
+    uint8_t active;
+    uint8_t state_flag;
 
     ut_t *tcb_ut;
     seL4_CPtr tcb;
@@ -30,6 +36,12 @@ typedef struct {
     cspace_t cspace;
 
     dynarray_t as;
+
+    struct {
+        seL4_Word parent_pid;
+        char* filename;
+        addrspace_t* scratch;
+    } loader_state;
 } proctable_t;
 
 extern proctable_t proctable[MAX_PID];

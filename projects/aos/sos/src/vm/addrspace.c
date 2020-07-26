@@ -96,6 +96,25 @@ int addrspace_find_overlap(dynarray_t* arr, addrspace_t as)
     return binary_search(arr->data, &as, sizeof(addrspace_t), arr->used, comp_as, false);
 }
 
+uintptr_t addrspace_find_free_reg(dynarray_t* arr, size_t size, uintptr_t bottom, uintptr_t top)
+{
+    if(arr->used == 0) {
+        // check if our entire addrspace can be used to fit this request!
+        if(size < (top - bottom))
+            return bottom;
+    } else {
+        // find an empty region, starting from rearmost!
+        for(int i = arr->used - 1; i >= 0; --i) {
+            uintptr_t ret = ((addrspace_t*)arr->data)[i].end;
+            if(size < (top - ret))
+                return ret;
+            top = ((addrspace_t*)arr->data)[i].begin;
+        }
+    }
+    // fail
+    return 0;
+}
+
 int comp_vaddr(const void* a, const void* b)
 {
     uintptr_t vaddr = *((uintptr_t*)a);

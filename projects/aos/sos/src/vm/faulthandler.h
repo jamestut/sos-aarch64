@@ -4,3 +4,5 @@
 #include <grp01/dynaarray.h>
 
 bool vm_fault(seL4_MessageInfo_t* tag, seL4_Word badge);
+
+bool sos_vm_fault(seL4_MessageInfo_t* tag);

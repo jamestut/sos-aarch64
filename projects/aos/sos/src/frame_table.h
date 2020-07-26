@@ -14,6 +14,7 @@
 #include "bootstrap.h"
 #include "ut.h"
 #include "grp01.h"
+#include "fileman.h"
 
 #include <stdlib.h>
 #include <stdbool.h>
@@ -52,8 +53,14 @@ extern char *frame_table_list_names[];
 /* Debugging macro to get the human-readable name of a particular list ID. */
 #define LIST_ID_NAME(list_id) (frame_table_list_names[list_id])
 
+// to save memory associated with the frame data bookkeeping, we decided
+// to limit the maximum amount of file that can be faulted.
+#define FILE_OFFSET_BITS 16
+#define FILE_BACKER_PTR_BITS 40
+#define MAX_FILE_BACK_SIZE (BIT(FILE_OFFSET_BITS) * PAGE_SIZE_4K)
+
 /* The actual representation of a frame in the frame table. */
-#define MAX_FRAME_USAGE 3
+#define MAX_FRAME_USAGE 1
 typedef struct frame frame_t;
 PACKED struct frame {
     // Index to the backing storage
@@ -73,8 +80,20 @@ PACKED struct frame {
     bool backed : 1;
     // Indicates if, on fault, requires zeroing out the new frame
     bool reqempty : 1;
-    // usage count, for "second chance" algorithm (max 3x if 2 bits)
-    size_t usage : 2;
+    // usage count, for "second chance" algorithm
+    size_t usage : 1;
+    // Indicates if this frame is backed by a file instead of a regular frame
+    // Only read-only operations are supported if this flag is on.
+    // Any write operation will be discarded upon frame free/page out.
+    bool file_backed : 1;
+
+    // file data. note that we have some limitation as we want to keep the
+    // frame structure usage down.
+    // If file_backed, indicates page position of this frame in file
+    size_t file_pos : FILE_OFFSET_BITS;
+    // If file_backed, indicates a pointer to struct addrspace_file_back
+    // note that address can't be too high if we want to save space.
+    uintptr_t file_backer : FILE_BACKER_PTR_BITS;
 };
 // our preferred target size
 compile_time_assert(struct frame size, sizeof(frame_t) == (sizeof(size_t) * 2));
@@ -178,3 +197,5 @@ frame_t *frame_from_ref(frame_ref_t frame_ref);
 bool frame_set_pin(frame_ref_t frame_ref, bool pin);
 
 bool page_out_frame(frame_ref_t frame_ref);
+
+void frame_set_file_backing(frame_ref_t frame_ref, sos_filehandle_t* backer, size_t page_offset);

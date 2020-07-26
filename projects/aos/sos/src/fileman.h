@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <grp01/dynaarray.h>
 #include <sos.h>
+#include <sys/types.h>
 
 #include "grp01.h"
 #include "sel4/sel4_arch/types.h"
@@ -55,6 +56,11 @@ struct filehandler
     file_closedir_fn closedir;
     file_close_fn close;
 };
+
+typedef struct {
+    struct filehandler* fh;
+    ssize_t id;
+} sos_filehandle_t;
 
 // initialize file table manager.
 // call once when SOS is starting up.

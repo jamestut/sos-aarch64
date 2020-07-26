@@ -25,7 +25,6 @@
 
 #include <clock/clock.h>
 #include <cpio/cpio.h>
-#include <elf/elf.h>
 #include <serial/serial.h>
 
 #include <sel4runtime.h>
@@ -50,6 +49,7 @@
 #include "threads.h"
 
 #include "grp01.h"
+#include "threadassert.h"
 #include "grp01/dynaarray.h"
 #include "fs/fake.h"
 
@@ -71,6 +71,8 @@
 #include "fs/nfs.h"
 // GRP01: rearch
 #include "proctable.h"
+// GRP01: M6
+#include "procman.h"
 
 #include <aos/vsyscall.h>
 
@@ -87,7 +89,6 @@
 #define IRQ_IDENT_BADGE_BITS MASK(seL4_BadgeBits - 1ul)
 
 #define FIRST_PROC_NAME             "sosh"
-#define USER_PRIORITY               (0)
 
 /*
  * A dummy starting syscall
@@ -107,8 +108,6 @@ cspace_t cspace;
 
 /* scratch address space */
 dynarray_t scratchas;
-// lock for both scratchas itself and when mapping/unmapping
-seL4_CPtr scratch_mtx;
 
 static seL4_CPtr sched_ctrl_start;
 static seL4_CPtr sched_ctrl_end;
@@ -242,6 +241,7 @@ void handle_fault(seL4_Word badge, seL4_MessageInfo_t message, seL4_CPtr reply)
         } else {
             switch(fault) {
                 case seL4_Fault_NullFault:
+                    resume = true;
                     break;
                 case seL4_Fault_VMFault:
                     // if vm_fault returns false, vm_fault will debug print the cause instead :)
@@ -250,13 +250,27 @@ void handle_fault(seL4_Word badge, seL4_MessageInfo_t message, seL4_CPtr reply)
                     break;
                 default:
                     debug_print_fault(message, msgbuff);
-                    ZF_LOGE("Fault not handled. Offending thread will be suspended indefinitely.");
+                    ZF_LOGW("Received fault %d from process %d, which is not handled.", fault, badge);
                     break;
             }
         }
+    } else if (badge == 0) {
+        // special case if SOS itself is faulting
+        switch(fault) {
+            case seL4_Fault_NullFault:
+                resume = true;
+                break;
+            case seL4_Fault_VMFault:
+                if(!sos_vm_fault(&message))
+                    ZF_LOGF("Unhandled VM fault on SOS thread");
+                resume = true;
+                break;
+            default:
+                ZF_LOGF("Unknown SOS fault: %d", fault);
+        }
     } else {
         debug_print_fault(message, msgbuff);
-        ZF_LOGE("This fault will not be handled!");
+        ZF_LOGF("Unknown fault from badge %d. Don't know what to do!", badge);
     }
 
     // TODO: GRP01 if resume is false, we should probably kill the offending process
@@ -341,321 +355,6 @@ NORETURN void syscall_loop(seL4_CPtr ep)
 #undef REPLY_OBJ_FULL
 #undef REPLY_OBJ_EMPTY
 
-static int stack_write(seL4_Word *mapped_stack, int index, uintptr_t val)
-{
-    mapped_stack[index] = val;
-    return index - 1;
-}
-
-/* set up System V ABI compliant stack, so that the process can
- * start up and initialise the C library */
-static uintptr_t init_process_stack(seL4_Word badge, elf_t *elf_file)
-{
-    // we assume that caller give the sane badge value here!
-    proctable_t* pt = proctable + badge;
-
-    // create the stack region
-    addrspace_t stackas;
-    stackas.end = PROCESS_STACK_TOP;
-    stackas.begin = PROCESS_STACK_TOP - PROCESS_STACK_MIN_PAGES * PAGE_SIZE_4K;
-    stackas.perm = seL4_CapRights_new(false, false, true, true);
-    stackas.attr.type = AS_STACK;
-
-    // map this stack region to process' address space
-    if(addrspace_add(&pt->as, stackas, false, NULL) != AS_ADD_NOERR) {
-        ZF_LOGE("Error adding stack address space region to process.");
-        return 0;
-    }
-
-    /* Create a stack frame */
-    frame_ref_t initial_stack = alloc_frame();
-    if(!initial_stack) {
-        ZF_LOGE("Failed to allocate initial stack");
-        return 0;
-    }
-
-    /* find the vsyscall table */
-    uintptr_t sysinfo = *((uintptr_t *) elf_getSectionNamed(elf_file, "__vsyscall", NULL));
-    if (sysinfo == 0) {
-        ZF_LOGE("could not find syscall table for c library");
-        return 0;
-    }
-
-    /* Map in the initial stack frame for the user app */
-    seL4_Error err = grp01_map_frame(badge, initial_stack, true, false,
-                               PROCESS_STACK_TOP - PAGE_SIZE_4K, seL4_AllRights, 
-                               seL4_ARM_Default_VMAttributes);
-    if (err != 0) {
-        ZF_LOGE("Unable to map stack for user app");
-        return 0;
-    }
-
-    int index = -2;
-    // FT: no pin needed. there is no other frame_data/frame_page until this 
-    // function finishes.
-    void *local_stack_top = frame_data(initial_stack) + PAGE_SIZE_4K;
-
-    /* null terminate the aux vectors */
-    index = stack_write(local_stack_top, index, 0);
-    index = stack_write(local_stack_top, index, 0);
-
-    /* write the aux vectors */
-    index = stack_write(local_stack_top, index, PAGE_SIZE_4K);
-    index = stack_write(local_stack_top, index, AT_PAGESZ);
-
-    index = stack_write(local_stack_top, index, sysinfo);
-    index = stack_write(local_stack_top, index, AT_SYSINFO);
-
-    index = stack_write(local_stack_top, index, PROCESS_IPC_BUFFER);
-    index = stack_write(local_stack_top, index, AT_SEL4_IPC_BUFFER_PTR);
-
-    /* null terminate the environment pointers */
-    index = stack_write(local_stack_top, index, 0);
-
-    /* we don't have any env pointers - skip */
-
-    /* null terminate the argument pointers */
-    index = stack_write(local_stack_top, index, 0);
-
-    /* no argpointers - skip */
-
-    /* set argc to 0 */
-    stack_write(local_stack_top, index, 0);
-
-    /* adjust the initial stack top (for return value) */
-    uintptr_t stack_top = PROCESS_STACK_TOP;
-    stack_top += (index * sizeof(seL4_Word));
-
-    /* the stack *must* remain aligned to a double word boundary,
-     * as GCC assumes this, and horrible bugs occur if this is wrong */
-    assert(index % 2 == 0);
-    assert(stack_top % (sizeof(seL4_Word) * 2) == 0);
-
-    return stack_top;
-}
-
-/* Start a process. Returns PID if successful, or -1 if failed.
- */
-int start_process(char *app_name, seL4_CPtr ep)
-{
-    // find process table to use
-    int ptidx = find_free_pid();
-    if(ptidx < 0)
-        return false;
-
-    proctable_t* pt = proctable + ptidx;
-    set_pid_state(ptidx, true);
-    
-    /* Create a VSpace */
-    pt->vspace_ut = alloc_retype(&pt->vspace, seL4_ARM_PageGlobalDirectoryObject,
-                                              seL4_PGDBits);
-    if (pt->vspace_ut == NULL) {
-        goto error_01;
-    }
-
-    // create mapping bookkeeping object for vspace
-    grp01_map_init(ptidx, pt->vspace);
-
-    /* assign the vspace to an asid pool */
-    seL4_Error err = seL4_ARM_ASIDPool_Assign(seL4_CapInitThreadASIDPool, pt->vspace);
-    if (err != seL4_NoError) {
-        ZF_LOGE("Failed to assign asid pool");
-        goto error_02;
-    }
-
-    /* Create a simple 1 level CSpace */
-    int cerr = cspace_create_one_level(&cspace, &pt->cspace);
-    if (cerr != CSPACE_NOERROR) {
-        ZF_LOGE("Failed to create cspace");
-        goto error_02;
-    }
-
-    /* Create an IPC buffer */
-    pt->ipc_buffer_frame = alloc_frame();
-    if (pt->ipc_buffer_frame == 0) {
-        ZF_LOGE("Failed to alloc ipc buffer frame");
-        goto error_03;
-    }
-    // avoid the TCB buffer to get paged out!
-    frame_set_pin(pt->ipc_buffer_frame, true);
-    
-    /* allocate a new slot in the target cspace which we will mint a badged endpoint cap into --
-     * the badge is used to identify the process, which will come in handy when you have multiple
-     * processes. */
-    seL4_CPtr user_ep = cspace_alloc_slot(&pt->cspace);
-    if (user_ep == seL4_CapNull) {
-        ZF_LOGE("Failed to alloc user ep slot");
-        goto error_04;
-    }
-
-    /* now mutate the cap, thereby setting the badge */
-    err = cspace_mint(&pt->cspace, user_ep, &cspace, ep, seL4_AllRights, ptidx);
-    if (err) {
-        ZF_LOGE("Failed to mint user ep");
-        // no need for special free as cspace_destroy will do it for us
-        goto error_04;
-    }
-
-    /* Create a new TCB object */
-    pt->tcb_ut = alloc_retype(&pt->tcb, seL4_TCBObject, seL4_TCBBits);
-    if (pt->tcb_ut == NULL) {
-        ZF_LOGE("Failed to alloc tcb ut");
-        goto error_04;
-    }
-
-    /* Configure the TCB */
-    pt->ipc_buffer_mapped_cap = cspace_alloc_slot(&cspace);
-    if(pt->ipc_buffer_mapped_cap == 0) {
-        ZF_LOGE("Failed to allocate slot for IPC buffer");
-        goto error_05;
-    }
-    // copy buffer page and map it to child app
-    err = cspace_copy(&cspace, pt->ipc_buffer_mapped_cap, frame_table_cspace(), frame_page(pt->ipc_buffer_frame), seL4_AllRights);
-    if(err) {
-        ZF_LOGE("Failed to copy IPC buffer cap");
-        goto error_06;
-    }
-    err = seL4_TCB_Configure(pt->tcb,
-                             pt->cspace.root_cnode, seL4_NilData,
-                             pt->vspace, seL4_NilData, PROCESS_IPC_BUFFER,
-                             pt->ipc_buffer_mapped_cap);
-    if (err != seL4_NoError) {
-        ZF_LOGE("Unable to configure new TCB");
-        goto error_07;
-    }
-
-    /* Create scheduling context */
-    pt->sched_context_ut = alloc_retype(&pt->sched_context, seL4_SchedContextObject,
-                                                     seL4_MinSchedContextBits);
-    if (pt->sched_context_ut == NULL) {
-        ZF_LOGE("Failed to alloc sched context ut");
-        goto error_07;
-    }
-
-    /* Configure the scheduling context to use the first core with budget equal to period */
-    err = seL4_SchedControl_Configure(sched_ctrl_start, pt->sched_context, US_IN_MS, US_IN_MS, 0, 0);
-    if (err != seL4_NoError) {
-        ZF_LOGE("Unable to configure scheduling context");
-        goto error_08;
-    }
-
-    // badged fault endpoint
-    pt->fault_ep = cspace_alloc_slot(&cspace);
-    if(pt->fault_ep == seL4_CapNull) {
-        ZF_LOGE("Unable to create slot for badged fault endpoint");
-        goto error_08;
-    }
-    err = cspace_mint(&cspace, pt->fault_ep, &cspace, ep, seL4_AllRights, ptidx);
-    if(err != seL4_NoError) {
-        ZF_LOGE("Error minting fault endpoint: %d", err);
-        cspace_free_slot(&cspace_free_slot, pt->fault_ep);
-        goto error_08;
-    }
-
-    /* bind sched context, set fault endpoint and priority
-     * In MCS, fault end point needed here should be in current thread's cspace.
-     * NOTE this will use the unbadged ep unlike above, you might want to mint it with a badge
-     * so you can identify which thread faulted in your fault handler */
-    err = seL4_TCB_SetSchedParams(pt->tcb, seL4_CapInitThreadTCB, seL4_MinPrio, USER_PRIORITY,
-                                  pt->sched_context, pt->fault_ep);
-    if (err != seL4_NoError) {
-        ZF_LOGE("Unable to set scheduling params");
-        goto error_09;
-    }
-
-    /* Provide a name for the thread -- Helpful for debugging */
-    NAME_THREAD(pt->tcb, app_name);
-
-    // TODO: GRP01: use proper IO
-    // TODO: GRP01: bookkeeping on error!
-    /* parse the cpio image */
-    ZF_LOGI("\nStarting \"%s\"...\n", app_name);
-    elf_t elf_file = {};
-    unsigned long elf_size;
-    size_t cpio_len = _cpio_archive_end - _cpio_archive;
-    char *elf_base = cpio_get_file(_cpio_archive, cpio_len, app_name, &elf_size);
-    if (elf_base == NULL) {
-        ZF_LOGE("Unable to locate cpio header for %s", app_name);
-        return false;
-    }
-    /* Ensure that the file is an elf file. */
-    if (elf_newFile(elf_base, elf_size, &elf_file)) {
-        ZF_LOGE("Invalid elf file");
-        return -1;
-    }
-
-    /* set up the stack */
-    seL4_Word sp = init_process_stack(ptidx, &elf_file);
-
-    /* load the elf image from the cpio file */
-    // also pass the address space region dynamic array
-    err = elf_load(ptidx, &cspace, pt->vspace, &elf_file, &pt->as);
-    if (err) {
-        ZF_LOGE("Failed to load elf image");
-        return false;
-    }
-
-    /* Map in the IPC buffer for the thread */
-    err = grp01_map_frame(ptidx, pt->ipc_buffer_frame, true, false, PROCESS_IPC_BUFFER,
-                    seL4_AllRights, seL4_ARM_Default_VMAttributes);
-    if (err != 0) {
-        ZF_LOGE("Unable to map IPC buffer for user app");
-        return false;
-    }
-
-    // create filetable
-    if(fileman_create(ptidx)) {
-        ZF_LOGE("Unable to allocate file table.");
-        return false;
-    }
-
-    // create background worker for this app
-    bgworker_create(ptidx);
-
-    /* Start the new process */
-    seL4_UserContext context = {
-        .pc = elf_getEntryPoint(&elf_file),
-        .sp = sp,
-    };
-    printf("Starting ttytest at %p\n", (void *) context.pc);
-    err = seL4_TCB_WriteRegisters(pt->tcb, 1, 0, 2, &context);
-    ZF_LOGE_IF(err, "Failed to write registers");
-    return err == seL4_NoError;
-
-error_09: // go here if error after minting fault endpoint
-    cspace_delete(&cspace, pt->fault_ep);
-    cspace_free_slot(&cspace, pt->fault_ep);
-
-error_08: // go here if error after creating scheduling context object
-    cap_ut_dealloc(pt->sched_context, pt->sched_context_ut);
-
-error_07: // go here if error after copying capability for IPC buffer
-    cspace_delete(&cspace, pt->ipc_buffer_mapped_cap);
-
-error_06: // go here if error after allocating slot for IPC buffer
-    cspace_free_slot(&cspace, pt->ipc_buffer_mapped_cap);
-    pt->ipc_buffer_mapped_cap = 0;
-
-error_05: // go here if error after creating TCB object
-    cap_ut_dealloc(&pt->tcb, &pt->tcb_ut);
-
-error_04: // go here if error after creating and pinning IPC buffer
-    frame_set_pin(pt->ipc_buffer_frame, false);
-    free_frame(pt->ipc_buffer_frame);
-    pt->ipc_buffer_frame = 0;
-
-error_03: // go here if error after creating user's cspace
-    cspace_destroy(&pt->cspace);
-    memset(&pt->cspace, 0, sizeof(pt->cspace));
-
-error_02: // go here if error after creating vspace
-    cap_ut_dealloc(&pt->vspace, &pt->vspace_ut);
-
-error_01: // go here if error after setting pid state to true
-    set_pid_state(ptidx, false);
-    return false;
-}
-
 /* Allocate an endpoint and a notification object for sos.
  * Note that these objects will never be freed, so we do not
  * track the allocated ut objects anywhere
@@ -721,14 +420,16 @@ void init_muslc(void)
 
 void scratchas_init(void)
 {
-    // preallocate scratchas w/ the size of background worker threads, so that we don't have to depend on
-    // the thread safety of malloc
+    // preallocate scratchas
     dynarray_init(&scratchas, sizeof(addrspace_t));
-    ZF_LOGF_IF(!dynarray_resize(&scratchas, MAX_PID), "Cannot allocate array for scratch address space.");
-    // lock for scratch space
-    ut_t* ntfn_ut = alloc_retype(&scratch_mtx, seL4_NotificationObject, seL4_NotificationBits);
-    ZF_LOGF_IF(!ntfn_ut, "Cannot allocate notification object for scratch locker.");
-    seL4_Signal(scratch_mtx);
+    ZF_LOGF_IF(!dynarray_resize(&scratchas, 8), "Cannot allocate array for scratch address space.");
+}
+
+void start_first_process(void* param)
+{
+    seL4_Word pid = (proctable_t*)param - proctable;
+    if(!start_process_load_elf(pid)) 
+        ZF_LOGF("Failed to start initial process.");
 }
 
 NORETURN void *main_continued(UNUSED void *arg)
@@ -753,8 +454,9 @@ NORETURN void *main_continued(UNUSED void *arg)
     // GRP01: init OS parts here
     delegate_init(&cspace, ipc_ep);
     scratchas_init();
-    fileman_init();
+    fileman_init(&cspace, ipc_ep);
     init_threads(ipc_ep, sched_ctrl_start, sched_ctrl_end);
+    init_process_starter(ipc_ep, sched_ctrl_start, sched_ctrl_end);
     bgworker_init();
     start_fake_timer();
     grp01_map_bookkeep_init();
@@ -795,10 +497,16 @@ NORETURN void *main_continued(UNUSED void *arg)
     
     frame_table_init_page_file();
 
+    // TBH this is here just for the sake of loading ELF/1st process!
+    bgworker_create(0);
+
     /* Start the user application */
     printf("Start first process\n");
-    bool success = start_process(FIRST_PROC_NAME, ipc_ep);
-    ZF_LOGF_IF(!success, "Failed to start first process");
+
+    // TODO: GRP01: ensure PID starts from 1, not 0!
+    int first_pid = create_process(0, FIRST_PROC_NAME);
+    ZF_LOGF_IF(first_pid <= 0, "Failed to bootstrap initial process.");
+    bgworker_enqueue_callback(0, start_first_process, proctable + first_pid);
 
     printf("\nSOS entering syscall loop\n");
 
@@ -810,10 +518,6 @@ NORETURN void *main_continued(UNUSED void *arg)
 int main(void)
 {
     init_muslc();
-
-    // DEBUG
-    char* a = 0;
-    *a = 5;
 
     /* register the location of the unwind_tables -- this is required for
      * backtrace() to work */

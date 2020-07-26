@@ -53,7 +53,6 @@ struct filetable
     struct fileentry fe[MAX_FH];
 };
 
-// PLAN: GRP01 should be replaced by a hashmap once we have more than one handlers
 struct {
     const char* name;
     struct filehandler handler;
@@ -228,7 +227,8 @@ int fileman_create(seL4_Word pid)
 
 bool fileman_destroy(seL4_Word pid) {
     struct filetable* pft = ft + pid;
-    ZF_LOGF_IF(!pft->used, "Attempt to destroy filetable on a nonexistent PID %d", pid);
+    if(!pft->used)
+        return true;
     
     bool carryondestruct = true;
     seL4_Wait(pft->active_mtx, NULL);

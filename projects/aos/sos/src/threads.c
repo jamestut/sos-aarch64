@@ -123,14 +123,14 @@ sos_thread_t *thread_create(thread_main_f function, void *arg, const char* name,
     /* allocate a new slot in the target cspace which we will mint a badged endpoint cap into --
      * the badge is used to identify the process, which will come in handy when you have multiple
      * processes. */
-    new_thread->user_ep = cspace_alloc_slot(&cspace);
-    if (new_thread->user_ep == seL4_CapNull) {
+    new_thread->fault_ep = cspace_alloc_slot(&cspace);
+    if (new_thread->fault_ep == seL4_CapNull) {
         ZF_LOGE("Failed to alloc user ep slot");
         return NULL;
     }
 
     /* now mutate the cap, thereby setting the badge */
-    seL4_Word err = cspace_mint(&cspace, new_thread->user_ep, &cspace, ep, seL4_AllRights,
+    seL4_Word err = cspace_mint(&cspace, new_thread->fault_ep, &cspace, ep, seL4_AllRights,
                                 badge);
     if (err) {
         ZF_LOGE("Failed to mint user ep");
@@ -183,7 +183,7 @@ sos_thread_t *thread_create(thread_main_f function, void *arg, const char* name,
      * so you can identify which thread faulted in your fault handler */
     err = seL4_TCB_SetSchedParams(new_thread->tcb, seL4_CapInitThreadTCB, prio,
                                   prio, new_thread->sched_context,
-                                  new_thread->user_ep);
+                                  new_thread->fault_ep);
     if (err != seL4_NoError) {
         ZF_LOGE("Unable to set scheduling params");
         return NULL;

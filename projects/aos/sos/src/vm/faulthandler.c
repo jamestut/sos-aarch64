@@ -65,3 +65,16 @@ bool vm_fault(seL4_MessageInfo_t* tag, seL4_Word badge)
     }
     return true;
 }
+
+bool sos_vm_fault(seL4_MessageInfo_t* tag)
+{
+    // special case if it is one of SOS' thread that is faulting
+    // we'll only do remapping here
+    seL4_Fault_t fault = seL4_getFault(*tag);
+    uintptr_t faultaddr = (uintptr_t)seL4_Fault_VMFault_get_Addr(fault);
+    
+    seL4_Error err;
+    err = grp01_map_frame(0, 0, true, false, ROUND_DOWN(faultaddr, PAGE_SIZE_4K), seL4_AllRights, seL4_ARM_Default_VMAttributes);
+
+    return err != seL4_NoError;
+}
