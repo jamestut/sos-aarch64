@@ -275,7 +275,7 @@ static size_t frame_mem_page_idx(frame_ref_t frame_ref)
                 if(frame->file_backed) {
                     // restore from the backed file
                     sos_filehandle_t* fh = (void*)frame->file_backer;
-                    ssize_t rd = fh->fh->read(0, fh->id,frame_table.frame_data[pageidx], frame->file_pos, PAGE_SIZE_4K);
+                    ssize_t rd = fh->fh->read(0, fh->id,frame_table.frame_data[pageidx], frame->file_pos * PAGE_SIZE_4K, PAGE_SIZE_4K);
                     ZF_LOGE_IF(rd <= 0, "Read file backed by file returned: %lld", rd);
                 } else {
                     // restore from PF
