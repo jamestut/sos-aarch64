@@ -210,6 +210,7 @@ int fileman_create(seL4_Word pid)
     if(!ft[pid].active_mtx) {
         if(!alloc_retype(&ft[pid].active_mtx, seL4_NotificationObject, seL4_NotificationBits))
             return ENOMEM;
+        seL4_Signal(ft[pid].active_mtx);
     }
 
     // by default, stdin/out/err is reserved!
@@ -465,11 +466,11 @@ void bg_fileman_open(void* data)
     ret = slot;
 
 finish:
+    pft_activity_finish(param->pid);
     unmap_user_string_bg(param->filename, param->filename_len, param->pid,
         param->filename_term);
     send_and_free_reply_cap(ret, param->reply);
     free(param);
-    pft_activity_finish(param->pid);
 }
 
 void bg_fileman_rw(void* data)
@@ -514,9 +515,9 @@ void bg_fileman_rw(void* data)
         pfe->offset += ret;
 
 finish:
+    pft_activity_finish(param->pid);
     send_and_free_reply_cap(ret, param->reply);
     free(param);
-    pft_activity_finish(param->pid);
 }
 
 void bg_fileman_close(void* data)
@@ -535,9 +536,9 @@ void bg_fileman_close(void* data)
     }
     
     //finish:
+    pft_activity_finish(param->pid);
     send_and_free_reply_cap(1, param->reply);
     free(param);
-    pft_activity_finish(param->pid);
 }
 
 void bg_fileman_stat(void* data)
@@ -551,6 +552,7 @@ void bg_fileman_stat(void* data)
     ssize_t err = handler->stat(param->pid, param->filename, &target.st);
 
 finish:
+    pft_activity_finish(param->pid);
     unmap_user_string_bg(param->filename, param->filename_len, param->pid,
         param->filename_term);
     if(err)
@@ -559,7 +561,6 @@ finish:
         send_and_free_reply_cap_ex(1, sizeof(target)/sizeof(seL4_Word), target.matcher,
             param->reply);
     free(param);
-    pft_activity_finish(param->pid);
 }
 
 void bg_fileman_readdir(void* data)
@@ -613,9 +614,9 @@ void bg_fileman_readdir(void* data)
     delegate_userptr_unmap(startptr);
 
 finish:
+    pft_activity_finish(param->pid);
     send_and_free_reply_cap(ret, param->reply);
     free(param);
-    pft_activity_finish(param->pid);
 }
 
 ssize_t fileman_write_broker(struct filehandler* fh, ssize_t id, userptr_t ptr, seL4_Word badge, size_t len, off_t offset)
