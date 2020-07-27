@@ -22,6 +22,7 @@
 #include <utils/util.h>
 #include <sos/gen_config.h>
 #include <grp01/bitfield.h>
+#include <fcntl.h>
 
 /* Debugging macro to get the human-readable name of a particular list. */
 #define LIST_NAME(list) LIST_ID_NAME(list->list_id)
@@ -173,10 +174,10 @@ void frame_table_init_page_file()
 {
     #if CONFIG_SOS_FAKE_PF > 0ul
     page_file.fh = *find_handler("fake");
-    page_file.id = page_file.fh->open(0, "fake", 7);
+    page_file.id = page_file.fh->open(0, "fake", O_RDWR);
     #else
     page_file.fh = find_handler("pf");
-    page_file.id = page_file.fh->open(0, "pf", 7);
+    page_file.id = page_file.fh->open(0, "pf", O_RDWR);
     #endif
 }
 

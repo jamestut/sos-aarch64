@@ -1,5 +1,6 @@
 #include "cpiofs.h"
 #include <errno.h>
+#include <fcntl.h>
 #include <cpio/cpio.h>
 #include <stdbool.h>
 #include <utils/arith.h>
@@ -38,6 +39,13 @@ void cpio_fs_init() {
 }
 
 ssize_t cpio_fs_open(seL4_Word pid, const char* fn, int mode) {
+    switch(mode && O_ACCMODE) {
+        case O_WRONLY:
+        case O_RDWR:
+            // writing is not allowed
+            return -EACCES;
+    }
+
     // check if it is possible to read the file from CPIO
     unsigned long filelen;
     uintptr_t filebase = (uintptr_t)cpio_get_file(_cpio_archive, cpio_len, fn, &filelen);
