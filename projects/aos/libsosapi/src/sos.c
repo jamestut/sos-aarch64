@@ -166,7 +166,18 @@ int sos_stat(const char *path, sos_stat_t *buf)
 
 pid_t sos_process_create(const char *path)
 {
-    return sos_sys_not_implemented();
+    uint32_t pathlen = strnlen(path, MAX_IO_BUF);
+    if(pathlen >= MAX_IO_BUF) {
+        sos_errno = ENAMETOOLONG;
+        return -1;
+    }
+
+    seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, 3);
+    seL4_SetMR(0, SOS_SYSCALL_PROC_NEW);
+    seL4_SetMR(1, path);
+    seL4_SetMR(2, pathlen);
+    seL4_Call(SOS_IPC_EP_CAP, msginfo);
+    return seL4_GetMR(0);
 }
 
 int sos_process_delete(pid_t pid)

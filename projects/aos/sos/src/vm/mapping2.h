@@ -67,5 +67,10 @@ userptr_write_state_t userptr_write_start(userptr_t src, size_t len, seL4_Word b
 //         otherwise, return true, even if no action is carried
 bool userptr_write_next(userptr_write_state_t* it);
 
+// map user supplied string. length cannot exceed the configured MAX_FILENAME.
+// if success, return value is guaranteed to be NULL terminated.
+// @param originalchar = stores the original terminating character.
+char* map_user_string(userptr_t ptr, size_t len, seL4_Word badge, char* originalchar);
+
 // Unmap and destroy the scratch address space that contains the given pointer.
 void userptr_unmap(void* sosaddr);

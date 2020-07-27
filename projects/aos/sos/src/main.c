@@ -52,6 +52,7 @@
 #include "threadassert.h"
 #include "grp01/dynaarray.h"
 #include "fs/fake.h"
+#include "fs/cpiofs.h"
 
 // GRP01: M1
 #include "libclocktest.h"
@@ -207,6 +208,10 @@ bool handle_syscall(seL4_Word badge, seL4_Word msglen, seL4_CPtr reply)
 
     case SOS_SYSCALL_LIST_PROC:
         handler_ret = proc_list(badge, seL4_GetMR(1), seL4_GetMR(2));
+        break;
+
+    case SOS_SYSCALL_PROC_NEW:
+        handler_ret = user_new_proc(badge, seL4_GetMR(1), seL4_GetMR(2), reply);
         break;
 
     case SOS_SYSCALL_UNIMPLEMENTED:

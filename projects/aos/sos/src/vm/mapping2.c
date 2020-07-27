@@ -944,6 +944,23 @@ bool userptr_write_next(userptr_write_state_t* it)
     return true;
 }
 
+char* map_user_string(userptr_t ptr, size_t len, seL4_Word badge, char* originalchar)
+{
+    if(len >= MAX_FILENAME) {
+        // flat out refuse if filename is too long!
+        ZF_LOGI("Refused to service very long file name.");
+        return NULL;
+    }
+    // WARNING! this function is meant to be called from main thread
+    char* ret = userptr_read(ptr, len + 1, badge);
+    if(!ret)
+        return ret;
+    // set last char to NULL to ensure safety
+    *originalchar = ret[len];
+    ret[len] = 0;
+    return ret;
+}
+
 void userptr_unmap(void* sosaddr)
 {
     assert_main_thread();
