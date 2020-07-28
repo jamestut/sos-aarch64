@@ -428,6 +428,18 @@ void destroy_process(seL4_CPtr pid)
     if(pt->tcb)
         cap_ut_dealloc(&pt->tcb, &pt->tcb_ut);
 
+    // tear down user's cspace
+    if(pt->cspace.bootstrap) {
+        cspace_destroy(&pt->cspace);
+        memset(&pt->cspace, 0, sizeof(pt->cspace));
+    }
+    
+    // tear down vspace
+    if(pt->vspace) {
+        grp01_map_destroy(pid);
+        cap_ut_dealloc(&pt->vspace, &pt->vspace_ut);
+    }
+
     // free IPC buffer's mapping on user's side
     if(pt->ipc_buffer_mapped_cap) {
         cspace_delete(&cspace, pt->ipc_buffer_mapped_cap);
@@ -439,18 +451,6 @@ void destroy_process(seL4_CPtr pid)
     if(pt->ipc_buffer_frame) {
         free_frame(pt->ipc_buffer_frame);
         pt->ipc_buffer_frame = 0;
-    }
-
-    // tear down user's cspace
-    if(pt->cspace.bootstrap) {
-        cspace_destroy(&pt->cspace);
-        memset(&pt->cspace, 0, sizeof(pt->cspace));
-    }
-    
-    // tear down vspace
-    if(pt->vspace) {
-        grp01_map_destroy(pid);
-        cap_ut_dealloc(&pt->vspace, &pt->vspace_ut);
     }
     
     // finally:
