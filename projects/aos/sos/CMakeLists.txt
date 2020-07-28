@@ -23,6 +23,10 @@ config_string(SosUseFakePageFile SOS_FAKE_PF "Use fake page file" UNQUOTE DEFAUL
 
 config_string(SosUseLocalFS SOS_LOCAL_FS "Use local FS on CPIO instead of NFS" UNQUOTE DEFAULT "0ul")
 
+config_string(SosMaxPID SOS_MAX_PID "Maximum number of processes that can run at the same time" UNQUOTE DEFAULT "128ul")
+
+config_string(SosMaxFileName SOS_MAX_FILENAME "Maximum length of filename plus one" UNQUOTE DEFAULT "4096ul")
+
 add_config_library(sos "${configure_string}")
 
 # warn about everything

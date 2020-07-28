@@ -3,6 +3,7 @@
 #include <sel4/sel4.h>
 #include <cspace/cspace.h>
 #include <grp01/dynaarray.h>
+#include <sos/gen_config.h>
 
 #include "ut.h"
 #include "frame_table.h"
@@ -49,7 +50,7 @@ typedef struct {
     } loader_state;
 } proctable_t;
 
-extern proctable_t proctable[MAX_PID];
+extern proctable_t proctable[CONFIG_SOS_MAX_PID];
 
 int find_free_pid(void);
 

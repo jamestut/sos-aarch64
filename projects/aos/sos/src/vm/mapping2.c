@@ -11,6 +11,7 @@
 #include "../vmem_layout.h"
 #include "../proctable.h"
 #include "../threadassert.h"
+#include <sos/gen_config.h>
 #include <sync/mutex.h>
 #include <sys/types.h>
 #include <utils/zf_log_if.h>
@@ -80,7 +81,7 @@ struct bookkeeping {
 
 // buckets used to bookeep page table objects.
 // we won't need lock for this structure because we are event based
-struct bookkeeping bk[MAX_PID];
+struct bookkeeping bk[CONFIG_SOS_MAX_PID];
 
 extern dynarray_t scratchas;
 
@@ -93,7 +94,7 @@ void grp01_map_init(seL4_Word badge, seL4_CPtr vspace)
 {
     // check if badge is valid :)
     // badge == 0 means we're managing SOS' (not used for now)
-    assert(badge < MAX_PID);
+    assert(badge < CONFIG_SOS_MAX_PID);
     
     // check if this vspace is not managed by us yet. also find the slot.
     struct bookkeeping* lbk = bk + badge;
@@ -108,7 +109,7 @@ void grp01_map_init(seL4_Word badge, seL4_CPtr vspace)
 void grp01_map_destroy(seL4_Word badge)
 {
     // never destroy SOS' structure
-    assert(badge && (badge < MAX_PID));
+    assert(badge && (badge < CONFIG_SOS_MAX_PID));
 
     struct bookkeeping* lbk = bk + badge;
     assert(lbk->vspace);
@@ -139,7 +140,7 @@ seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_fram
     if(!vaddr)
         return seL4_IllegalOperation;
 
-    if(badge >= MAX_PID || !vspace)
+    if(badge >= CONFIG_SOS_MAX_PID || !vspace)
         return seL4_RangeError;
 
     // find the bucket
@@ -444,7 +445,7 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_Word vaddrbegin, seL4_Word va
     if(vaddrend < vaddrbegin)
         return seL4_RangeError;
 
-    if(badge >= MAX_PID || !vspace)
+    if(badge >= CONFIG_SOS_MAX_PID || !vspace)
         return seL4_RangeError;
 
     // find the bucket
@@ -962,7 +963,7 @@ bool userptr_write_next(userptr_write_state_t* it)
 
 char* map_user_string(userptr_t ptr, size_t len, seL4_Word badge, char* originalchar)
 {
-    if(len >= MAX_FILENAME) {
+    if(len >= CONFIG_SOS_MAX_FILENAME) {
         // flat out refuse if filename is too long!
         ZF_LOGI("Refused to service very long file name.");
         return NULL;

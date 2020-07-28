@@ -3,6 +3,7 @@
 #include <sync/bin_sem.h>
 #include <sync/condition_var.h>
 #include <grp01/dynaarray.h>
+#include <sos/gen_config.h>
 
 #include "threads.h"
 #include "utils.h"
@@ -22,7 +23,7 @@ typedef struct {
     void* data;
 } bgdata_t;
 
-bgdata_t bgdata[MAX_PID];
+bgdata_t bgdata[CONFIG_SOS_MAX_PID];
 
 /* local functions declarations */
 void bgworker_loop(void*);
@@ -40,7 +41,7 @@ void bgworker_init()
 
 void bgworker_create(seL4_Word pid)
 {
-    ZF_LOGF_IF(pid >= MAX_PID, "Wrong PID");
+    ZF_LOGF_IF(pid >= CONFIG_SOS_MAX_PID, "Wrong PID");
 
     bgdata_t * bd = bgdata + pid;
     // TODO: GRP01: we should destroy the background thread upon process close.

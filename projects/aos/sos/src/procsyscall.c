@@ -8,10 +8,11 @@
 #include <sos.h>
 #include <errno.h>
 #include <utils/arith.h>
+#include <sos/gen_config.h>
 
 static bool proclist_valid = false;
 static uint32_t proclist_count = 0;
-static sos_process_t proclist[MAX_PID];
+static sos_process_t proclist[CONFIG_SOS_MAX_PID];
 static seL4_CPtr io_finish_ep;
 
 struct user_start_process_bg_param {
@@ -21,7 +22,7 @@ struct user_start_process_bg_param {
     char filename_term;
 };
 
-_Static_assert(BIT(sizeof(uint16_t)*8) > MAX_FILENAME, "Filename length must fit in uint16_t");
+_Static_assert(BIT(sizeof(uint16_t)*8) > CONFIG_SOS_MAX_FILENAME, "Filename length must fit in uint16_t");
 
 void refresh_proclist(void);
 
@@ -99,7 +100,7 @@ error: // go here if error after successfully mapped user string
 
 seL4_Word user_delete_proc(seL4_Word targetpid)
 {
-    if(!targetpid || targetpid >= MAX_PID)
+    if(!targetpid || targetpid >= CONFIG_SOS_MAX_PID)
         return -ESRCH;
     
     proctable_t* pt = proctable + targetpid;
@@ -121,7 +122,7 @@ void invalidate_proc_list_cache()
 void refresh_proclist()
 {
     proclist_count = 0;
-    for(uint32_t i = 0; i < MAX_PID; ++i) {
+    for(uint32_t i = 0; i < CONFIG_SOS_MAX_PID; ++i) {
         proctable_t* pt = proctable + i;
         if(pt->active) {
             sos_process_t* pl = proclist + proclist_count++;

@@ -124,7 +124,7 @@ bool handle_syscall(seL4_Word badge, seL4_Word msglen, seL4_CPtr reply)
 
     // check if badge corresponds to a valid process table entry
     proctable_t* pt = NULL;
-    if(badge == 0 || badge >= MAX_PID) {
+    if(badge == 0 || badge >= CONFIG_SOS_MAX_PID) {
         handler_ret = ESRCH;
         goto finish;
     }
@@ -244,7 +244,7 @@ void handle_fault(seL4_Word badge, seL4_MessageInfo_t message, seL4_CPtr reply)
 
     bool resume = false;
 
-    if(badge >= 1 && badge < MAX_PID) {
+    if(badge >= 1 && badge < CONFIG_SOS_MAX_PID) {
         proctable_t* pt = proctable + badge;
         // must be from our processes!
         if(!pt->active) {
@@ -296,7 +296,7 @@ void handle_fault(seL4_Word badge, seL4_MessageInfo_t message, seL4_CPtr reply)
 }
 
 // macros specific for syscall_loop
-#define REPLY_OBJ_COUNT ((MAX_PID)*2)
+#define REPLY_OBJ_COUNT ((CONFIG_SOS_MAX_PID)*2)
 #define REPLY_POS_INC(x) (((x) + 1) % REPLY_OBJ_COUNT)
 #define REPLY_OBJ_FULL (REPLY_POS_INC(prodpos) == conspos)
 #define REPLY_OBJ_EMPTY (prodpos == conspos)

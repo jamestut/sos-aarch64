@@ -107,7 +107,7 @@ struct bg_readdir_param {
 };
 
 // local variables declaration area
-struct filetable ft[MAX_PID];
+struct filetable ft[CONFIG_SOS_MAX_PID];
 
 // used to signal main thread if a process has pending IO while killed
 seL4_CPtr io_finish_ep;
@@ -207,7 +207,7 @@ bool fileman_init(cspace_t* srccspace, seL4_CPtr ipc_ep)
 int fileman_create(seL4_Word pid)
 {
     // the usual error checking
-    if(pid >= MAX_PID)
+    if(pid >= CONFIG_SOS_MAX_PID)
         return EBADF;
     if(ft[pid].used)
         return EEXIST;
@@ -271,7 +271,7 @@ int fileman_open(seL4_Word pid, seL4_CPtr reply, userptr_t filename, size_t file
 {
     // error checking
     // bad pid
-    if((pid >= MAX_PID) || (!ft[pid].used))
+    if((pid >= CONFIG_SOS_MAX_PID) || (!ft[pid].used))
         return EBADF * -1;
 
     struct filetable* pft = ft + pid;
@@ -302,7 +302,7 @@ int fileman_close(seL4_Word pid, seL4_CPtr reply, int fh)
 {
     // basic error check
 
-    if((pid >= MAX_PID) || (!ft[pid].used))
+    if((pid >= CONFIG_SOS_MAX_PID) || (!ft[pid].used))
         return 1;
     
     struct filetable* pft = ft + pid;
@@ -338,7 +338,7 @@ int fileman_read(seL4_Word pid, int fh, seL4_CPtr reply, userptr_t buff, uint32_
 int fileman_rw_dispatch(bool read, seL4_Word pid, int fh, seL4_CPtr reply, userptr_t buff, uint32_t len)
 {
     // bad pid
-    if((pid >= MAX_PID) || (!ft[pid].used))
+    if((pid >= CONFIG_SOS_MAX_PID) || (!ft[pid].used))
         return EBADF * -1;
     
     struct filetable* pft = ft + pid;
@@ -367,7 +367,7 @@ int fileman_rw_dispatch(bool read, seL4_Word pid, int fh, seL4_CPtr reply, userp
 
 int fileman_stat(seL4_Word pid, seL4_CPtr reply, userptr_t filename, size_t filename_len)
 {
-    if(pid >= MAX_PID)
+    if(pid >= CONFIG_SOS_MAX_PID)
         return -EINVAL;
 
     struct filetable* pft = ft + pid;
@@ -395,7 +395,7 @@ int fileman_stat(seL4_Word pid, seL4_CPtr reply, userptr_t filename, size_t file
 
 int fileman_readdir(seL4_Word pid, int fh, seL4_CPtr reply, size_t pos, userptr_t buff, size_t bufflen)
 {
-    if(pid >= MAX_PID)
+    if(pid >= CONFIG_SOS_MAX_PID)
         return -EINVAL;
 
     struct filetable* pft = ft + pid;
