@@ -3,6 +3,7 @@
 #include "procman.h"
 #include "bgworker.h"
 #include "delegate.h"
+#include "utils.h"
 #include "vm/mapping2.h"
 #include <sos.h>
 #include <errno.h>
@@ -11,6 +12,7 @@
 static bool proclist_valid = false;
 static uint32_t proclist_count = 0;
 static sos_process_t proclist[MAX_PID];
+static seL4_CPtr io_finish_ep;
 
 struct user_start_process_bg_param {
     seL4_CPtr reply;
@@ -24,6 +26,14 @@ _Static_assert(BIT(sizeof(uint16_t)*8) > MAX_FILENAME, "Filename length must fit
 void refresh_proclist(void);
 
 void user_start_process_bg(void* param);
+
+void proc_syscall_init(cspace_t* srccspace, seL4_CPtr ipc_ep)
+{
+    io_finish_ep = cspace_alloc_slot(&cspace);
+    ZF_LOGF_IF(!io_finish_ep, "Cannot allocate slot for endpoint");
+    ZF_LOGF_IF(cspace_mint(&cspace, io_finish_ep, srccspace, ipc_ep, seL4_AllRights, BADGE_IO_FINISH) != seL4_NoError,
+        "Error minting endpoint");
+}
 
 int proc_list(seL4_Word pid, userptr_t dest, size_t buffcount)
 {
@@ -70,10 +80,9 @@ int user_new_proc(seL4_Word pid, userptr_t p_filename, size_t p_filename_len, se
 
     // schedule background worker to proceed loading ELF
     struct user_start_process_bg_param* param = malloc(sizeof(struct user_start_process_bg_param));
-    if(!param) {
-        destroy_process(newpid);
+    if(!param)
         goto error;
-    }
+    
     param->pid = newpid;
     param->reply = reply;
     param->filename_term = originalterm;
@@ -86,6 +95,22 @@ error: // go here if error after successfully mapped user string
     filename[p_filename_len - 1] = originalterm;
     userptr_unmap(filename);
     return -ESRCH;
+}
+
+seL4_Word user_delete_proc(seL4_Word targetpid)
+{
+    if(!targetpid || targetpid >= MAX_PID)
+        return -ESRCH;
+    
+    proctable_t* pt = proctable + targetpid;
+    if(!pt->active)
+        return -ESRCH;
+
+    // process destruction might be pending because the target process is doing IO
+    // however, even in such cases, we will return back ASAP to the calling process.
+    destroy_process(targetpid);
+
+    return 1;
 }
 
 void invalidate_proc_list_cache()
@@ -131,4 +156,10 @@ void user_start_process_bg(void* pparam)
     seL4_Send(reply, msg);
 
     delegate_reuse_reply(reply);
+
+    if(pt->state_flag & PROC_STATE_PENDING_KILL) {
+        seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 1);
+        seL4_SetMR(0, param->pid);
+        seL4_Call(io_finish_ep, msg);
+    }
 }

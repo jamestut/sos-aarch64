@@ -17,4 +17,3 @@ int create_process(seL4_Word parent_pid, char *app_name);
 bool start_process_load_elf(seL4_Word new_pid);
 
 void destroy_process(seL4_CPtr pid);
-

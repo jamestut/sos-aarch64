@@ -7,6 +7,7 @@
 #include <utils/zf_log_if.h>
 #include <cspace/cspace.h>
 #include <sys/types.h>
+#include <fcntl.h>
 
 #include "utils.h"
 #include "fs/console.h"
@@ -111,6 +112,8 @@ struct filetable ft[MAX_PID];
 // used to signal main thread if a process has pending IO while killed
 seL4_CPtr io_finish_ep;
 
+struct filehandler* consolehandler;
+
 // local functions declaration area
 void send_and_free_reply_cap(ssize_t response, seL4_CPtr reply);
 void send_and_free_reply_cap_ex(ssize_t response, size_t extrawords, void* extradata, seL4_CPtr reply);
@@ -136,7 +139,7 @@ bool fileman_init(cspace_t* srccspace, seL4_CPtr ipc_ep)
 {
     io_finish_ep = cspace_alloc_slot(&cspace);
     ZF_LOGF_IF(!io_finish_ep, "Cannot allocate slot for endpoint");
-    ZF_LOGF_IF(cspace_mint(&cspace, io_finish_ep, srccspace, ipc_ep, seL4_AllRights, BADGE_FILEMAN_IO_FINISH) != seL4_NoError,
+    ZF_LOGF_IF(cspace_mint(&cspace, io_finish_ep, srccspace, ipc_ep, seL4_AllRights, BADGE_IO_FINISH) != seL4_NoError,
         "Error minting endpoint");
 
     memset(ft, 0, sizeof(ft));
@@ -195,6 +198,9 @@ bool fileman_init(cspace_t* srccspace, seL4_CPtr ipc_ep)
     specialhandlers[1].handler.closedir = null_fs_close;
     #endif
 
+    consolehandler = find_handler("console");
+    ZF_LOGF_IF(!consolehandler, "Console handler not found");
+
     return true;
 }
 
@@ -213,11 +219,16 @@ int fileman_create(seL4_Word pid)
         seL4_Signal(ft[pid].active_mtx);
     }
 
-    // by default, stdin/out/err is reserved!
-    // TODO: GRP01: be compliant with the spec
-    for(int i=0; i<=2; ++i) {
-        ft[pid].fe[i].used = true;
-        ft[pid].fe[i].handler = &nullhandler;
+    // stdout and stderr should be initialized to console
+    ssize_t consoleid = consolehandler->open(pid, "console", O_WRONLY);
+    if(consoleid >= 0) {
+        for(int i=1; i<=2; ++i) {
+            ft[pid].fe[i].used = true;
+            ft[pid].fe[i].handler = consolehandler;
+            ft[pid].fe[i].id = consoleid;
+        }
+    } else {
+        ZF_LOGE("Console cannot be opened for PID %d. Expect stdout and stderr to not work.", pid);
     }
 
     // set the flag to indicate that someone is using this PID

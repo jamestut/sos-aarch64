@@ -46,6 +46,8 @@ int create_process(seL4_Word parent_pid, char *app_name)
     pt->state_flag = PROC_STATE_CONSTRUCTING;
 
     dynarray_init(&pt->as, sizeof(addrspace_t));
+    // in case we need to map something
+    addrspace_t newas;
     
     /* Create a VSpace */
     pt->vspace_ut = alloc_retype(&pt->vspace, seL4_ARM_PageGlobalDirectoryObject,
@@ -168,8 +170,17 @@ int create_process(seL4_Word parent_pid, char *app_name)
         goto on_error;
     }
 
+    // add IPC buffer to user's AS region
+    newas.attr.type = AS_NORMAL;
+    newas.attr.data = 0;
+    newas.begin = PROCESS_IPC_BUFFER;
+    newas.end = PROCESS_IPC_BUFFER + PAGE_SIZE_4K;
+    newas.perm = seL4_AllRights;
+    addrspace_add(&pt->as, newas, false, NULL);
+
     /* Map in the IPC buffer for the thread */
-    err = grp01_map_frame(ptidx, pt->ipc_buffer_frame, true, false, PROCESS_IPC_BUFFER,
+    // free_on_delete is false: we'll free the frame table manually upon process destruction.
+    err = grp01_map_frame(ptidx, pt->ipc_buffer_frame, false, false, PROCESS_IPC_BUFFER,
                     seL4_AllRights, seL4_ARM_Default_VMAttributes);
     if (err != 0) {
         ZF_LOGE("Unable to map IPC buffer for user app");
@@ -304,6 +315,7 @@ bool start_process_load_elf(seL4_Word new_pid)
     assert_non_main_thread();
 
     proctable_t* pt = proctable + new_pid;
+    assert(pt->state_flag & PROC_STATE_CONSTRUCTING);
     seL4_Word parent_pid = pt->loader_state.parent_pid;
 
     // check file size
@@ -366,12 +378,16 @@ bool start_process_load_elf(seL4_Word new_pid)
     };
     seL4_Error err = seL4_TCB_WriteRegisters(pt->tcb, 1, 0, 2, &context);
     ZF_LOGE_IF(err, "Failed to write registers");
+
+    pt->state_flag ^= PROC_STATE_CONSTRUCTING;
+
     return err == seL4_NoError;
 
 error_02: // go here if error after allocating scratch
     delegate_free_sos_scratch(scratch_base);
 error_01: // go here if error after opening file
     fh.fh->close(parent_pid, fh.id);
+    pt->state_flag ^= PROC_STATE_CONSTRUCTING;
     return false;
 }
 
@@ -380,7 +396,7 @@ void destroy_process(seL4_CPtr pid)
     assert_main_thread();
     proctable_t* pt = proctable + pid;
     assert(pt->active);
-    if(pt->state_flag & PROC_STATE_CONSTRUCTING) {
+    if(pt->state_flag & (PROC_STATE_CONSTRUCTING | PROC_STATE_PENDING_KILL)) {
         // the ELF loading stage when finishes will call the 3rd stage
         // the 3rd stage, which will be executed in main thread, should
         // check this flag first before proceeding.
@@ -388,9 +404,11 @@ void destroy_process(seL4_CPtr pid)
         return;
     }
 
-    // TODO: GRP01: check return value. If false, then it is a pending destroy.
-    // In that case, schedule a later destruction upon IO completion.
-    fileman_destroy(pid);
+    if(!fileman_destroy(pid)) {
+        // fileman itself will schedule a deletion later
+        pt->state_flag |= PROC_STATE_PENDING_KILL;
+        return;
+    }
 
     // we assume that nonzero fields have valid values and need to be destroyed/freed
     // therefore it is crucial not to left any values nonzero.
@@ -404,7 +422,7 @@ void destroy_process(seL4_CPtr pid)
 
     // free scheduling context
     if(pt->sched_context)
-        cap_ut_dealloc(pt->sched_context, pt->sched_context_ut);
+        cap_ut_dealloc(&pt->sched_context, &pt->sched_context_ut);
 
     // free TCB
     if(pt->tcb)

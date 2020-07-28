@@ -92,11 +92,6 @@
 
 #define FIRST_PROC_NAME             "sosh"
 
-/*
- * A dummy starting syscall
- */
-#define SOS_SYSCALL0 0
-
 /* The linker will link this symbol to the start address  *
  * of an archive of attached applications.                */
 extern char _cpio_archive[];
@@ -214,10 +209,14 @@ bool handle_syscall(seL4_Word badge, seL4_Word msglen, seL4_CPtr reply)
         handler_ret = user_new_proc(badge, seL4_GetMR(1), seL4_GetMR(2), reply);
         break;
 
+    case SOS_SYSCALL_PROC_DEL:
+        handler_ret = user_delete_proc(seL4_GetMR(1));
+        break;
+
     case SOS_SYSCALL_UNIMPLEMENTED:
         // just print this message as specified :)
         puts("system call not implemented");
-        handler_ret = 1;
+        handler_ret = ENOSYS;
         break;
         
     default:
@@ -338,9 +337,9 @@ NORETURN void syscall_loop(seL4_CPtr ep)
         } else if (label == seL4_Fault_NullFault) {
             switch(badge)
             {
-                case BADGE_FILEMAN_IO_FINISH:
-                    // TODO: GRP01: implement
-                    // 1st word is the PID to be killed
+                case BADGE_IO_FINISH:
+                    ZF_LOGI("carrying on pending process destroy for PID %d", seL4_GetMR(0));
+                    destroy_process(seL4_GetMR(0));
                     break;
                 case BADGE_DELEGATE:
                     handle_delegate_req(badge, msglen, *reply);
@@ -464,7 +463,7 @@ NORETURN void *main_continued(UNUSED void *arg)
     // fill in SOS' own process data!
     set_pid_state(0, true);
     proctable[0].vspace = seL4_CapInitThreadVSpace;
-    strncpy(proctable[0].command, "<sos system>", N_NAME);
+    strncpy(proctable[0].command, "<SOS system>", N_NAME);
 
     // GRP01: init OS parts here
     delegate_init(&cspace, ipc_ep);
@@ -472,6 +471,7 @@ NORETURN void *main_continued(UNUSED void *arg)
     fileman_init(&cspace, ipc_ep);
     init_threads(ipc_ep, sched_ctrl_start, sched_ctrl_end);
     init_process_starter(ipc_ep, sched_ctrl_start, sched_ctrl_end);
+    proc_syscall_init(&cspace, ipc_ep);
     bgworker_init();
     start_fake_timer();
     grp01_map_bookkeep_init();

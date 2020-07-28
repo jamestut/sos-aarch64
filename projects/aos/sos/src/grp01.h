@@ -21,7 +21,7 @@
 #define BADGE_DELEGATE  (0x10000)
 // badge for returning reply object
 #define BADGE_REPLY_RET (0x10001)
-// badge that fileman will send upon IO completion and a kill is pending
-#define BADGE_FILEMAN_IO_FINISH (0x10002)
+// badge that some background worker will send upon IO completion and a kill is pending
+#define BADGE_IO_FINISH (0x10002)
 
 typedef uintptr_t userptr_t;

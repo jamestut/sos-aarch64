@@ -182,7 +182,11 @@ pid_t sos_process_create(const char *path)
 
 int sos_process_delete(pid_t pid)
 {
-    return sos_sys_not_implemented();
+    seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, 2);
+    seL4_SetMR(0, SOS_SYSCALL_PROC_DEL);
+    seL4_SetMR(1, pid);
+    seL4_Call(SOS_IPC_EP_CAP, msginfo);
+    return seL4_GetMR(0) < 0 ? -1 : 0;
 }
 
 pid_t sos_my_id(void)

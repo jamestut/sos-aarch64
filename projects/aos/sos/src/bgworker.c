@@ -43,6 +43,9 @@ void bgworker_create(seL4_Word pid)
     ZF_LOGF_IF(pid >= MAX_PID, "Wrong PID");
 
     bgdata_t * bd = bgdata + pid;
+    // TODO: GRP01: we should destroy the background thread upon process close.
+    if(bd->workerthread)
+        return;
 
     if(!bd->ntfn)
         ZF_LOGF_IF(!alloc_retype(&bd->ntfn, seL4_NotificationObject, seL4_NotificationBits),
@@ -51,7 +54,6 @@ void bgworker_create(seL4_Word pid)
     // set notification to 0, so that we can wait for child to finish
     seL4_Poll(bd->ntfn, NULL);
     
-    ZF_LOGF_IF(bd->workerthread, "Background worker for PID %d already exists", pid);
     bd->workerthread = spawn(bgworker_loop, bd, "bgworker", 0, 0, 0);
 }
 

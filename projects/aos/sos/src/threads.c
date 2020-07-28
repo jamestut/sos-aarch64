@@ -87,6 +87,7 @@ static void thread_trampoline(sos_thread_t *thread, thread_main_f *function, voi
  *
  * TODO: fix memory leaks
  */
+// TODO: GRP01: make stack pages paged
 sos_thread_t *thread_create(thread_main_f function, void *arg, const char* name, seL4_Word badge, bool resume, seL4_CPtr ep, seL4_Word prio)
 {
     /* we allocate stack for additional sos threads
