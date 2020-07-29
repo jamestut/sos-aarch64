@@ -286,12 +286,17 @@ void handle_fault(seL4_Word badge, seL4_MessageInfo_t message, seL4_CPtr reply)
         ZF_LOGF("Unknown fault from badge %d. Don't know what to do!", badge);
     }
 
-    // TODO: GRP01 if resume is false, we should probably kill the offending process
-    // since we reuse the reply object for serving another thread, practically
-    // this thread will be suspended indefinitely (zombie?)
     if(resume) {
         seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 0);
         seL4_Send(reply, msg);
+    } else {
+        if(!badge) {
+            // this means that one of our thread is faulting. this is fatal!
+            ZF_LOGF("SOS thread unhandled fault. Aborting.");
+        } else {
+            printf("Process %d will be killed.\n", badge);
+            destroy_process(badge);
+        }
     }
 }
 

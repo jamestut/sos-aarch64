@@ -282,10 +282,13 @@ static size_t frame_mem_page_idx(frame_ref_t frame_ref)
                     // restore from PF
                     ssize_t rdres = page_file.fh->read(0, page_file.id, frame_table.frame_data[pageidx],
                         frame->back_idx * PAGE_SIZE_4K, PAGE_SIZE_4K);
-                    // should the read is failed for any reason, we'll panic!
-                    // TODO: GRP01: we should kill the process instead!
-                    ZF_LOGF_IF(rdres != PAGE_SIZE_4K, "Error reading from page file: got %lld instead of %lld",
-                        rdres, PAGE_SIZE_4K);
+                    // should the read is failed for any reason, we'll bail out!
+                    // we also consider unfulfilled reads as a failure as well ...
+                    if(rdres != PAGE_SIZE_4K) {
+                        ZF_LOGE("Error reading from page file: got %lld instead of %lld",
+                            rdres, PAGE_SIZE_4K);
+                        return 0;
+                    }
                     // mark the backing page file as free
                     assert(GET_BMP(frame_table.pf_bmp, frame->back_idx));
                     TOGGLE_BMP(frame_table.pf_bmp, frame->back_idx);

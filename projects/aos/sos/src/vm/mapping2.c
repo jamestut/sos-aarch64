@@ -160,7 +160,10 @@ seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_fram
             }
         }
         ppd_fr = ppd->dir;
-        ppd = ((struct pagedir*)frame_data(ppd_fr)) + PD_INDEX(vaddr, pdtype);
+        struct pagedir* ppd_fr_data = frame_data(ppd_fr);
+        if(!ppd_fr_data)
+            return seL4_NotEnoughMemory;
+        ppd = ppd_fr_data + PD_INDEX(vaddr, pdtype);
     }
     // pin the ppd so that we don't get evicted.
     frame_set_pin(ppd_fr, true);
