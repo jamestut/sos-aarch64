@@ -17,7 +17,7 @@ static seL4_CPtr io_finish_ep;
 
 struct user_start_process_bg_param {
     seL4_CPtr reply;
-    uint16_t pid;
+    sos_pid_t pid;
     uint16_t filename_termpos;
     char filename_term;
 };
@@ -38,6 +38,8 @@ void proc_syscall_init(cspace_t* srccspace, seL4_CPtr ipc_ep)
 
 int proc_list(seL4_Word pid, userptr_t dest, size_t buffcount)
 {
+    assert(pid < CONFIG_SOS_MAX_PID);
+
     int ret;
     if(!proclist_valid)
         refresh_proclist();
@@ -68,6 +70,8 @@ int proc_list(seL4_Word pid, userptr_t dest, size_t buffcount)
 
 int user_new_proc(seL4_Word pid, userptr_t p_filename, size_t p_filename_len, seL4_CPtr reply)
 {
+    assert(pid < CONFIG_SOS_MAX_PID);
+    
     char originalterm;
     char* filename = map_user_string(p_filename, p_filename_len, pid, &originalterm);
     if(!filename)

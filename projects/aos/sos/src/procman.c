@@ -2,6 +2,7 @@
 #include "threadassert.h"
 #include "proctable.h"
 #include "utils.h"
+#include "grp01.h"
 #include "vmem_layout.h"
 #include "vm/addrspace.h"
 #include "vm/mapping2.h"
@@ -22,9 +23,11 @@ static seL4_CPtr ep;
 static seL4_CPtr sched_ctrl_start;
 static seL4_CPtr sched_ctrl_end;
 
+// processes that waited upon -1
+
 extern dynarray_t scratchas;
 
-bool setup_scratch_space(seL4_Word pid, size_t filesize);
+bool setup_scratch_space(sos_pid_t pid, size_t filesize);
 
 void init_process_starter(seL4_CPtr ep_, seL4_CPtr sched_ctrl_start_, seL4_CPtr sched_ctrl_end_)
 {
@@ -33,11 +36,11 @@ void init_process_starter(seL4_CPtr ep_, seL4_CPtr sched_ctrl_start_, seL4_CPtr 
     sched_ctrl_end = sched_ctrl_end_;
 }
 
-int create_process(seL4_Word parent_pid, char *app_name)
+sos_pid_t create_process(sos_pid_t parent_pid, char *app_name)
 {
     assert_main_thread();
     // find process table to use
-    int ptidx = find_free_pid();
+    sos_pid_t ptidx = find_free_pid();
     if(ptidx < 0)
         return -1;
 
@@ -226,7 +229,7 @@ static int stack_write(seL4_Word *mapped_stack, int index, uintptr_t val)
 
 /* set up System V ABI compliant stack, so that the process can
  * start up and initialise the C library */
-static uintptr_t init_process_stack(seL4_Word badge, elf_t *elf_file)
+static uintptr_t init_process_stack(sos_pid_t badge, elf_t *elf_file)
 {
     // we assume that caller give the sane badge value here!
     proctable_t* pt = proctable + badge;
@@ -311,7 +314,7 @@ static uintptr_t init_process_stack(seL4_Word badge, elf_t *elf_file)
     return stack_top;
 }
 
-bool start_process_load_elf(seL4_Word new_pid)
+bool start_process_load_elf(sos_pid_t new_pid)
 {
     // we need main thread to be able to handle fault
     assert_non_main_thread();
@@ -393,7 +396,7 @@ error_01: // go here if error after opening file
     return false;
 }
 
-void destroy_process(seL4_CPtr pid)
+void destroy_process(sos_pid_t pid)
 {
     assert_main_thread();
     proctable_t* pt = proctable + pid;

@@ -43,7 +43,7 @@ void bgworker_init()
     memset(bgdata, 0, sizeof(bgdata));
 }
 
-bool bgworker_create(seL4_Word pid)
+bool bgworker_create(sos_pid_t pid)
 {
     ZF_LOGF_IF(pid >= CONFIG_SOS_MAX_PID, "Wrong PID");
 
@@ -77,7 +77,7 @@ on_error:
     return false;
 }
 
-void bgworker_destroy(seL4_Word pid)
+void bgworker_destroy(sos_pid_t pid)
 {
     bgdata_t * bd = bgdata + pid;
 
@@ -93,7 +93,7 @@ void bgworker_destroy(seL4_Word pid)
     }
 }
 
-bool bgworker_enqueue_callback(seL4_Word pid, bgworker_callback_fn fn, void* args)
+bool bgworker_enqueue_callback(sos_pid_t pid, bgworker_callback_fn fn, void* args)
 {
     // if we do this, then we have a bug!
     ZF_LOGF_IF(!initialized, "Backend not initialized!");

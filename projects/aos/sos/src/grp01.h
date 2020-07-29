@@ -2,6 +2,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <sos/gen_config.h>
 
 // contains definitions for group01's SOS assignment
 
@@ -18,3 +19,8 @@
 #define BADGE_IO_FINISH (0x10002)
 
 typedef uintptr_t userptr_t;
+
+typedef int16_t sos_pid_t;
+#define PID_NS_MAX 0x7FFF
+#define INVALID_PID (-1)
+_Static_assert(CONFIG_SOS_MAX_PID <= PID_NS_MAX, "Configured PID too large");
