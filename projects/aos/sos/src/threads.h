@@ -21,8 +21,6 @@
 extern cspace_t cspace;
 
 typedef struct {
-    bool active;
-
     ut_t *tcb_ut;
     seL4_CPtr tcb;
 

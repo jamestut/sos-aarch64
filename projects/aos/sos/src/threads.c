@@ -11,6 +11,7 @@
  */
 #include "threads.h"
 
+#include <grp01/bitfield.h>
 #include <stdlib.h>
 #include <utils/util.h>
 #include <sel4runtime.h>
@@ -36,7 +37,8 @@
     SOS_THRD_IDX(thrd_ref) * PAGE_SIZE_4K * CONFIG_SOS_INT_THREADS_STACK_PAGES)
 
 static sos_thread_t threads[SOS_MAX_THREAD] = {0};
-static int thread_clockhand = 0;
+#define SOS_THREADS_BF_WORDS ((SOS_MAX_THREAD + 7) / 8)
+static uint64_t threads_usage[SOS_THREADS_BF_WORDS] = {0};
 
 __thread sos_thread_t *current_thread = NULL;
 
@@ -45,14 +47,15 @@ static seL4_CPtr sched_ctrl_end;
 
 static seL4_CPtr ipc_ep;
 
+static void set_thread_active(int index, bool active);
+
 void init_threads(seL4_CPtr ep, seL4_CPtr sched_ctrl_start_, seL4_CPtr sched_ctrl_end_)
 {
     ipc_ep = ep;
     sched_ctrl_start = sched_ctrl_start_;
     sched_ctrl_end = sched_ctrl_end_;
 
-    // sentinel
-    threads->active = true;
+    set_thread_active(0, true);
 }
 
 static bool alloc_stack(sos_thread_t* thread)
@@ -111,16 +114,12 @@ sos_thread_t *thread_create(thread_main_f function, void *arg, const char* name,
 
     // find empty TCB slot
     sos_thread_t* new_thread = NULL;
-    int thread_idx;
-    for(int i = 0; i < SOS_MAX_THREAD; ++i) {
-        thread_clockhand = (thread_clockhand + 1) % SOS_MAX_THREAD;
-        if(!threads[thread_clockhand].active) {
-            new_thread = threads + thread_clockhand;
-            thread_idx = thread_clockhand;
-            break;
-        }
-    }
-
+    int thread_idx = bitfield_first_free(SOS_THREADS_BF_WORDS, threads_usage);
+    // make sure that we never ever use the "sentinel" thread
+    assert(thread_idx > 0);
+    if(thread_idx < SOS_MAX_THREAD)
+        new_thread = threads + thread_idx;
+    
     if (new_thread == NULL) {
         ZF_LOGE("Cannot allocate new thread");
         return NULL;
@@ -129,7 +128,7 @@ sos_thread_t *thread_create(thread_main_f function, void *arg, const char* name,
     // instead of a counter that increase monotically, we propose something like this!
     seL4_Word curr_ipc_buf = SOS_THRD_IPC_BUFF_VADDR(new_thread);
 
-    new_thread->active = true;
+    set_thread_active(thread_idx, true);
     new_thread->badge = badge;
 
     /* Create an IPC buffer */
@@ -274,10 +273,12 @@ void thread_destroy(sos_thread_t* thread)
     // we won't free stack and IPC buffers here: we'll reuse them.
     assert_main_thread();
 
-    if(!thread || !thread->active)
+    int thread_idx = SOS_THRD_IDX(thread);
+
+    if(!thread || !GET_BMP(threads_usage, thread_idx))
         return;
 
-    thread->active = false;
+    set_thread_active(thread_idx, false);
 
     if(thread->tcb)
         cap_ut_dealloc(&thread->tcb, &thread->tcb_ut);
@@ -300,4 +301,10 @@ void thread_destroy(sos_thread_t* thread)
 sos_thread_t *spawn(thread_main_f function, void *arg, const char* name, seL4_Word badge, seL4_CPtr ep, seL4_Word prio)
 {
     return thread_create(function, arg, name, badge, true, ep == seL4_CapNull ? ipc_ep : ep, prio);
+}
+
+static void set_thread_active(int index, bool active)
+{
+    assert(GET_BMP(threads_usage, index) != active);
+    TOGGLE_BMP(threads_usage, index);
 }
