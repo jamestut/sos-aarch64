@@ -5,14 +5,17 @@
 #include "../threads.h"
 
 #ifndef CONFIG_PLAT_ODROIDC2
-bool started = false;
+static sos_thread_t* fake_timer_thread;
+static bool started = false;
 
 void timer_ticker(void* unused);
 
 void start_fake_timer()
 {
     if(!started) {
-        spawn(timer_ticker, NULL, "fake_timer", 0, 0, 0);
+        fake_timer_thread = spawn(timer_ticker, NULL, "fake_timer", 0, 0, 0);
+        if(!fake_timer_thread)
+            return;
         started = true;
         ZF_LOGI("Fake timer started!");
     }

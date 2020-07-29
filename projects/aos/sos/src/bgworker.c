@@ -17,8 +17,12 @@ bool initialized = false;
 // lock free: all processes are single threaded.
 typedef struct {
     sos_thread_t* workerthread;
+    
     // used to wake up the corresponding thread!
     seL4_CPtr ntfn;
+    ut_t* ntfn_ut;
+
+    // the queued data
     bgworker_callback_fn fn;
     void* data;
 } bgdata_t;
@@ -39,28 +43,54 @@ void bgworker_init()
     memset(bgdata, 0, sizeof(bgdata));
 }
 
-void bgworker_create(seL4_Word pid)
+bool bgworker_create(seL4_Word pid)
 {
     ZF_LOGF_IF(pid >= CONFIG_SOS_MAX_PID, "Wrong PID");
 
     bgdata_t * bd = bgdata + pid;
-    // TODO: GRP01: we should destroy the background thread upon process close.
+    
     if(bd->workerthread)
-        return;
+        // if we already have a thread handle, it means that things was constructed
+        // successfully
+        return true;
 
-    if(!bd->ntfn)
-        ZF_LOGF_IF(!alloc_retype(&bd->ntfn, seL4_NotificationObject, seL4_NotificationBits),
-            "Error creating notification object for background worker");
+    if(!bd->ntfn) {
+        bd->ntfn_ut = alloc_retype(&bd->ntfn, seL4_NotificationObject, seL4_NotificationBits);
+        if(!bd->ntfn_ut) {
+            ZF_LOGE("Error creating notification for background worker PID %d", pid);
+            goto on_error;
+        }
+    }
 
     // set notification to 0, so that we can wait for child to finish
     seL4_Poll(bd->ntfn, NULL);
     
     bd->workerthread = spawn(bgworker_loop, bd, "bgworker", 0, 0, 0);
+    if(!bd->workerthread) {
+        ZF_LOGE("Error creating background thread for PID %d", pid);
+        goto on_error;
+    }
+    return true;
+
+on_error:
+    bgworker_destroy(pid);
+    return false;
 }
 
 void bgworker_destroy(seL4_Word pid)
 {
-    ZF_LOGF("Not implemented!");
+    bgdata_t * bd = bgdata + pid;
+
+    if(bd->workerthread) {
+        thread_destroy(bd->workerthread);
+        bd->workerthread = NULL;
+    }
+
+    if(bd->ntfn) {
+        cap_ut_dealloc(&bd->ntfn, &bd->ntfn_ut);
+        bd->ntfn = 0;
+        bd->ntfn_ut = NULL;
+    }
 }
 
 bool bgworker_enqueue_callback(seL4_Word pid, bgworker_callback_fn fn, void* args)

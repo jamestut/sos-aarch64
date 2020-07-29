@@ -205,8 +205,10 @@ int create_process(seL4_Word parent_pid, char *app_name)
     pt->command[N_NAME - 1] = 0;
 
     // create background worker for this app.
-    // this background worker's thread will be kept for SOS' lifetime
-    bgworker_create(ptidx);
+    if(!bgworker_create(ptidx)) {
+        ZF_LOGE("Unable to spawn SOS' thread for user app");
+        goto on_error;
+    }
 
     return ptidx;
 
@@ -462,5 +464,6 @@ void destroy_process(seL4_CPtr pid)
     *pt->command = 0;
     pt->file_size = 0;
     dynarray_destroy(&pt->as);
+    bgworker_destroy(pid);
     set_pid_state(pid, false);
 }

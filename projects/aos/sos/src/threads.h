@@ -14,26 +14,32 @@
 #include <sel4runtime.h>
 #include <threads.h>
 #include <cspace/cspace.h>
+#include <sos/gen_config.h>
 #include "ut.h"
+#include "frame_table.h"
 
 extern cspace_t cspace;
 
 typedef struct {
+    bool active;
+
     ut_t *tcb_ut;
     seL4_CPtr tcb;
 
+    ut_t* ipc_buffer_ut;
+    seL4_CPtr ipc_buffer_cap;
+
+    ut_t* stack_frame_uts[CONFIG_SOS_INT_THREADS_STACK_PAGES];
+    seL4_CPtr stack_frame_caps[CONFIG_SOS_INT_THREADS_STACK_PAGES];
+
     seL4_CPtr fault_ep;
-    ut_t *ipc_buffer_ut;
-    seL4_CPtr ipc_buffer;
-    seL4_Word ipc_buffer_vaddr;
 
     ut_t *sched_context_ut;
     seL4_CPtr sched_context;
 
-    ut_t *stack_ut;
-    seL4_CPtr stack;
     seL4_Word badge;
 
+    void* tls_memory;
     uintptr_t tls_base;
 } sos_thread_t;
 
@@ -45,6 +51,7 @@ void init_threads(seL4_CPtr ep, seL4_CPtr sched_ctrl_start_, seL4_CPtr sched_ctr
 sos_thread_t *thread_create(thread_main_f function, void *arg, const char* name, seL4_Word badge, bool resume, seL4_CPtr ep, seL4_Word prio);
 int thread_suspend(sos_thread_t *thread);
 int thread_resume(sos_thread_t *thread);
+void thread_destroy(sos_thread_t* thread);
 
 // badge will be used for badging fault endpoint
 sos_thread_t *spawn(thread_main_f function, void *arg, const char* name, seL4_Word badge, seL4_CPtr ep, seL4_Word prio);

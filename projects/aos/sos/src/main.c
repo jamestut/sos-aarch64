@@ -518,7 +518,7 @@ NORETURN void *main_continued(UNUSED void *arg)
     frame_table_init_page_file();
 
     // TBH this is here just for the sake of loading ELF/1st process!
-    bgworker_create(0);
+    ZF_LOGF_IF(!bgworker_create(0), "Cannot create SOS background worker");
 
     /* Start the user application */
     printf("Start first process\n");

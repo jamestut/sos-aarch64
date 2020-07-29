@@ -25,6 +25,10 @@ config_string(SosUseLocalFS SOS_LOCAL_FS "Use local FS on CPIO instead of NFS" U
 
 config_string(SosMaxPID SOS_MAX_PID "Maximum number of processes that can run at the same time" UNQUOTE DEFAULT "128ul")
 
+config_string(SosExtraThreads SOS_EXTRA_THREADS "Additional number of internal threads supported beyond those used for user processes" UNQUOTE DEFAULT "8ul")
+
+config_string(SosIntThreadsStackPages SOS_INT_THREADS_STACK_PAGES "Number of pages for each internal SOS stack" UNQUOTE DEFAULT "2ul")
+
 config_string(SosMaxFileName SOS_MAX_FILENAME "Maximum length of filename plus one" UNQUOTE DEFAULT "4096ul")
 
 add_config_library(sos "${configure_string}")

@@ -8,6 +8,7 @@
 #include "ut.h"
 #include "frame_table.h"
 #include "grp01.h"
+#include "threads.h"
 #include "vm/addrspace.h"
 
 enum procstate {
@@ -37,6 +38,10 @@ typedef struct {
     cspace_t cspace;
 
     dynarray_t as;
+
+    // reference to the thread that will handle kernel activity 
+    // for this process.
+    sos_thread_t* bgthrd;
 
     // infos that we'll be giving @ process_status
     size_t file_size;

@@ -7,7 +7,7 @@ typedef void (*bgworker_callback_fn)(void* data);
 void bgworker_init();
 
 // create a background thread for a pid
-void bgworker_create(seL4_Word pid);
+bool bgworker_create(seL4_Word pid);
 
 void bgworker_destroy(seL4_Word pid);
 
