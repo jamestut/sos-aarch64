@@ -37,7 +37,7 @@
     SOS_THRD_IDX(thrd_ref) * PAGE_SIZE_4K * CONFIG_SOS_INT_THREADS_STACK_PAGES)
 
 static sos_thread_t threads[SOS_MAX_THREAD] = {0};
-#define SOS_THREADS_BF_WORDS ((SOS_MAX_THREAD + 7) / 8)
+#define SOS_THREADS_BF_WORDS ((SOS_MAX_THREAD + 63) / 64)
 static uint64_t threads_usage[SOS_THREADS_BF_WORDS] = {0};
 
 __thread sos_thread_t *current_thread = NULL;
