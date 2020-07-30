@@ -209,7 +209,11 @@ int sos_process_status(sos_process_t *processes, unsigned max)
 
 pid_t sos_process_wait(pid_t pid)
 {
-    return sos_sys_not_implemented();
+    seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, 2);
+    seL4_SetMR(0, SOS_SYSCALL_WAITPID);
+    seL4_SetMR(1, pid);
+    seL4_Call(SOS_IPC_EP_CAP, msginfo);
+    return seL4_GetMR(0) < 0 ? -1 : seL4_GetMR(0);
 }
 
 void sos_sys_usleep(int msec)
