@@ -6,6 +6,7 @@
 #include "../delegate.h"
 #include "../backtrace.h"
 
+#include <sos/gen_config.h>
 #include <sys/stat.h>
 #include <sync/mutex.h>
 #include <sync/condition_var.h>
@@ -66,7 +67,7 @@ typedef struct {
 // fileman will give us a PID to guarantee that same PID = same thread
 // we can leverage this fact to store notification objects to avoid
 // recreating/freeing them over and over again
-seL4_CPtr ntfnpool[MAX_PID] = {0};
+seL4_CPtr ntfnpool[CONFIG_SOS_MAX_PID] = {0};
 
 /* ---- callbacks for libnfs ---- */
 void cb_generic(int status, struct nfs_context *nfs, void *data, void *private_data);
@@ -90,7 +91,7 @@ void convert_stat(struct stat* src, sos_stat_t* dst);
 void grp01_nfs_init()
 {
     // create notification objects on pool
-    for(int i = 0; i < MAX_PID; ++i) {
+    for(int i = 0; i < CONFIG_SOS_MAX_PID; ++i) {
         ZF_LOGF_IF(!alloc_retype(ntfnpool + i, seL4_NotificationObject, seL4_NotificationBits),
             "Error creating notification object pool for NFS driver");
     }

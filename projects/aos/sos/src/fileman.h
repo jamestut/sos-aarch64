@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <grp01/dynaarray.h>
 #include <sos.h>
+#include <sys/types.h>
 
 #include "grp01.h"
 #include "sel4/sel4_arch/types.h"
@@ -56,6 +57,11 @@ struct filehandler
     file_close_fn close;
 };
 
+typedef struct {
+    struct filehandler* fh;
+    ssize_t id;
+} sos_filehandle_t;
+
 // initialize file table manager.
 // call once when SOS is starting up.
 // @param p_cspace pointer to cspace shared with eventloop handler.
@@ -67,7 +73,9 @@ bool fileman_init();
 int fileman_create(seL4_Word pid);
 
 // free the file table of given pid.
-void fileman_destroy(seL4_Word pid);
+// @return false if there is a pending IO. Upon IO completion, main will be called
+// to clear the remaining pieces. true otherwise.
+bool fileman_destroy(seL4_Word pid);
 
 // get the handler functions appropriate for the file name
 struct filehandler* find_handler(const char* fn);

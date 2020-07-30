@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <cspace/cspace.h>
 #include "utils.h"
+#include "maininterface.h"
 #include "delegate.h"
 
 #define MSEC_TO_USEC(x) (x * 1000)
@@ -29,6 +30,7 @@ static void sleep_callback(UNUSED uint32_t dummy_id, void * data)
     seL4_Send(sleeper->reply, reply_msg);
 
     // dont forget to free our sleeper!
+    sos_reuse_reply(sleeper->reply);
     free(sleeper);
 }
 

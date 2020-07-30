@@ -3,6 +3,7 @@
 #include <sync/bin_sem.h>
 #include <sync/condition_var.h>
 #include <grp01/dynaarray.h>
+#include <sos/gen_config.h>
 
 #include "threads.h"
 #include "utils.h"
@@ -16,13 +17,17 @@ bool initialized = false;
 // lock free: all processes are single threaded.
 typedef struct {
     sos_thread_t* workerthread;
+    
     // used to wake up the corresponding thread!
     seL4_CPtr ntfn;
+    ut_t* ntfn_ut;
+
+    // the queued data
     bgworker_callback_fn fn;
     void* data;
 } bgdata_t;
 
-bgdata_t bgdata[MAX_PID];
+bgdata_t bgdata[CONFIG_SOS_MAX_PID];
 
 /* local functions declarations */
 void bgworker_loop(void*);
@@ -38,29 +43,57 @@ void bgworker_init()
     memset(bgdata, 0, sizeof(bgdata));
 }
 
-void bgworker_create(seL4_Word pid)
+bool bgworker_create(sos_pid_t pid)
 {
-    ZF_LOGF_IF(pid >= MAX_PID, "Wrong PID");
+    ZF_LOGF_IF(pid >= CONFIG_SOS_MAX_PID, "Wrong PID");
 
     bgdata_t * bd = bgdata + pid;
+    
+    if(bd->workerthread)
+        // if we already have a thread handle, it means that things was constructed
+        // successfully
+        return true;
 
-    if(!bd->ntfn)
-        ZF_LOGF_IF(!alloc_retype(&bd->ntfn, seL4_NotificationObject, seL4_NotificationBits),
-            "Error creating notification object for background worker");
+    if(!bd->ntfn) {
+        bd->ntfn_ut = alloc_retype(&bd->ntfn, seL4_NotificationObject, seL4_NotificationBits);
+        if(!bd->ntfn_ut) {
+            ZF_LOGE("Error creating notification for background worker PID %d", pid);
+            goto on_error;
+        }
+    }
 
     // set notification to 0, so that we can wait for child to finish
     seL4_Poll(bd->ntfn, NULL);
     
-    ZF_LOGF_IF(bd->workerthread, "Background worker for PID %d already exists", pid);
     bd->workerthread = spawn(bgworker_loop, bd, "bgworker", 0, 0, 0);
+    if(!bd->workerthread) {
+        ZF_LOGE("Error creating background thread for PID %d", pid);
+        goto on_error;
+    }
+    return true;
+
+on_error:
+    bgworker_destroy(pid);
+    return false;
 }
 
-void bgworker_destroy(seL4_Word pid)
+void bgworker_destroy(sos_pid_t pid)
 {
-    ZF_LOGF("Not implemented!");
+    bgdata_t * bd = bgdata + pid;
+
+    if(bd->workerthread) {
+        thread_destroy(bd->workerthread);
+        bd->workerthread = NULL;
+    }
+
+    if(bd->ntfn) {
+        cap_ut_dealloc(&bd->ntfn, &bd->ntfn_ut);
+        bd->ntfn = 0;
+        bd->ntfn_ut = NULL;
+    }
 }
 
-bool bgworker_enqueue_callback(seL4_Word pid, bgworker_callback_fn fn, void* args)
+bool bgworker_enqueue_callback(sos_pid_t pid, bgworker_callback_fn fn, void* args)
 {
     // if we do this, then we have a bug!
     ZF_LOGF_IF(!initialized, "Backend not initialized!");

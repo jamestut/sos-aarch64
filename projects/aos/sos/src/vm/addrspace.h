@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <sel4/sel4.h>
 #include <grp01/dynaarray.h>
+#include "../fileman.h"
 
 typedef enum {
     // normal action upon fault: page in, or create new zero frame
@@ -52,3 +53,4 @@ int addrspace_find(dynarray_t* arr, uintptr_t vaddr);
 //         else, returns -1
 int addrspace_find_overlap(dynarray_t* arr, addrspace_t as);
 
+uintptr_t addrspace_find_free_reg(dynarray_t* arr, size_t size, uintptr_t bottom, uintptr_t top);

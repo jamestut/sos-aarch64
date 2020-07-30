@@ -379,7 +379,7 @@ void network_init(cspace_t *cspace, void *timer_vaddr, seL4_CPtr irq_ntfn)
     ZF_LOGF_IF(ret != 0, "NFS Mount failed: %s", nfs_get_error(nfs));
 
     // create network thread.
-    netthrd.thrd = spawn(network_thread, NULL, "network_thread", 0, netthrd.ep, 0);
+    netthrd.thrd = spawn_system(network_thread, NULL, "network_thread", netthrd.ep, 0, 24);
     ZF_LOGF_IF(!netthrd.thrd, "Error creating network thread");
     // bind ntfn to TCB so that the thread can receive IRQ
     error = seL4_TCB_BindNotification(netthrd.thrd->tcb, netthrd.ntfn);

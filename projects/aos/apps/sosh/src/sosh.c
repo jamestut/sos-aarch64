@@ -151,7 +151,7 @@ static int cp(int argc, char **argv)
     return 0;
 }
 
-#define MAX_PROCESSES 10
+#define MAX_PROCESSES 128
 
 static int ps(int argc, char **argv)
 {
@@ -442,6 +442,17 @@ static int md5(int argc, char *argv[])
     close(fh);
 }
 
+static int mypid(int argc, char *argv[])
+{
+    printf("Current PID = %d\n", sos_my_id());
+}
+
+static int quit(int argc, char *argv[])
+{
+    puts("Bye!");
+    _exit(0);
+}
+
 struct command {
     char *name;
     int (*command)(int argc, char **argv);
@@ -451,7 +462,8 @@ struct command commands[] = { { "dir", dir }, { "ls", dir }, { "cat", cat }, {
         "cp", cp
     }, { "ps", ps }, { "exec", exec }, {"sleep", second_sleep}, {"msleep", milli_sleep},
     {"time", second_time}, {"mtime", micro_time}, {"kill", kill},
-    {"benchmark", benchmark},{"thrash",thrash},{"md5",md5}
+    {"benchmark", benchmark},{"thrash",thrash},{"md5",md5},{"mypid",mypid},
+    {"exit",quit},{"quit",quit}
 };
 
 int main(void)

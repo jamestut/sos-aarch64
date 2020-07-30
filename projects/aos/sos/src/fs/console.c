@@ -19,6 +19,7 @@
 
 // local variable section
 struct serial * serhdl = NULL;
+bool hasreader = false;
 
 struct {
     // store read data here if no one is doing read now
@@ -49,20 +50,41 @@ enum perm {
 
 ssize_t console_fs_open(UNUSED seL4_Word pid, UNUSED const char* fn, int mode)
 {
+    ssize_t ret;
     // stateless!
     switch(mode) {
         case O_RDONLY:
-            return PERM_RD;
+            ret = PERM_RD;
+            break;
         case O_WRONLY:
-            return PERM_WR;
+            ret = PERM_WR;
+            break;
         case O_RDWR:
-            return PERM_WR | PERM_RD;
+            ret = PERM_WR | PERM_RD;
+            break;
         default:
             return 0;
     }
+
+    if(ret & PERM_RD) {
+        if(hasreader) {
+            ZF_LOGI("An active console reader exists.");
+            return -EPERM;
+        }
+        hasreader = true;
+    }
+
+    return ret;
 }
 
-void console_fs_close(UNUSED seL4_Word pid, UNUSED ssize_t id) { /* stateless! do nothing! */ }
+void console_fs_close(UNUSED seL4_Word pid, ssize_t id)
+{
+    // the ID is passed by SOS, so we expect it to be always valid
+    if(id & PERM_RD) {
+        if(hasreader)
+            hasreader = false;
+    }
+}
 
 // platform specific functions
 #ifdef CONFIG_PLAT_ODROIDC2

@@ -166,27 +166,54 @@ int sos_stat(const char *path, sos_stat_t *buf)
 
 pid_t sos_process_create(const char *path)
 {
-    return sos_sys_not_implemented();
+    uint32_t pathlen = strnlen(path, MAX_IO_BUF);
+    if(pathlen >= MAX_IO_BUF) {
+        sos_errno = ENAMETOOLONG;
+        return -1;
+    }
+
+    seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, 3);
+    seL4_SetMR(0, SOS_SYSCALL_PROC_NEW);
+    seL4_SetMR(1, path);
+    seL4_SetMR(2, pathlen);
+    seL4_Call(SOS_IPC_EP_CAP, msginfo);
+    return seL4_GetMR(0);
 }
 
 int sos_process_delete(pid_t pid)
 {
-    return sos_sys_not_implemented();
+    seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, 2);
+    seL4_SetMR(0, SOS_SYSCALL_PROC_DEL);
+    seL4_SetMR(1, pid);
+    seL4_Call(SOS_IPC_EP_CAP, msginfo);
+    return seL4_GetMR(0) < 0 ? -1 : 0;
 }
 
 pid_t sos_my_id(void)
 {
-    return sos_sys_not_implemented();
+    seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, 1);
+    seL4_SetMR(0, SOS_SYSCALL_MY_ID);
+    seL4_Call(SOS_IPC_EP_CAP, msginfo);
+    return seL4_GetMR(0);
 }
 
 int sos_process_status(sos_process_t *processes, unsigned max)
 {
-    return sos_sys_not_implemented();
+    seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, 3);
+    seL4_SetMR(0, SOS_SYSCALL_LIST_PROC);
+    seL4_SetMR(1, processes);
+    seL4_SetMR(2, max);
+    seL4_Call(SOS_IPC_EP_CAP, msginfo);
+    return seL4_GetMR(0);
 }
 
 pid_t sos_process_wait(pid_t pid)
 {
-    return sos_sys_not_implemented();
+    seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, 2);
+    seL4_SetMR(0, SOS_SYSCALL_WAITPID);
+    seL4_SetMR(1, pid);
+    seL4_Call(SOS_IPC_EP_CAP, msginfo);
+    return seL4_GetMR(0) < 0 ? -1 : seL4_GetMR(0);
 }
 
 void sos_sys_usleep(int msec)

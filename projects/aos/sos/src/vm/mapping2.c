@@ -10,6 +10,8 @@
 #include "../utils.h"
 #include "../vmem_layout.h"
 #include "../proctable.h"
+#include "../threadassert.h"
+#include <sos/gen_config.h>
 #include <sync/mutex.h>
 #include <sys/types.h>
 #include <utils/zf_log_if.h>
@@ -79,22 +81,20 @@ struct bookkeeping {
 
 // buckets used to bookeep page table objects.
 // we won't need lock for this structure because we are event based
-struct bookkeeping bk[MAX_PID];
+struct bookkeeping bk[CONFIG_SOS_MAX_PID];
 
 extern dynarray_t scratchas;
-extern sync_mutex_t scratch_lock;
 
 void grp01_map_bookkeep_init()
 {
     memset(bk, 0, sizeof(bk));
 }
 
-bool grp01_map_init(seL4_Word badge, seL4_CPtr vspace)
+void grp01_map_init(seL4_Word badge, seL4_CPtr vspace)
 {
     // check if badge is valid :)
     // badge == 0 means we're managing SOS' (not used for now)
-    if(badge >= MAX_PID)
-        return false;
+    assert(badge < CONFIG_SOS_MAX_PID);
     
     // check if this vspace is not managed by us yet. also find the slot.
     struct bookkeeping* lbk = bk + badge;
@@ -104,6 +104,21 @@ bool grp01_map_init(seL4_Word badge, seL4_CPtr vspace)
     lbk->vspace = vspace;
 
     return true;
+}
+
+void grp01_map_destroy(seL4_Word badge)
+{
+    // never destroy SOS' structure
+    assert(badge && (badge < CONFIG_SOS_MAX_PID));
+
+    struct bookkeeping* lbk = bk + badge;
+    assert(lbk->vspace);
+
+    // unmap everything, including shadow tables
+    grp01_unmap_frame(badge, 0, VMEM_TOP, true);
+
+    // caller should destroy the vspace object
+    lbk->vspace = 0;
 }
 
 seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_frame_on_delete, bool unpin_on_unmap, seL4_Word vaddr, seL4_CapRights_t rights,
@@ -125,7 +140,7 @@ seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_fram
     if(!vaddr)
         return seL4_IllegalOperation;
 
-    if(badge >= MAX_PID || !vspace)
+    if(badge >= CONFIG_SOS_MAX_PID || !vspace)
         return seL4_RangeError;
 
     // find the bucket
@@ -145,7 +160,10 @@ seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_fram
             }
         }
         ppd_fr = ppd->dir;
-        ppd = ((struct pagedir*)frame_data(ppd_fr)) + PD_INDEX(vaddr, pdtype);
+        struct pagedir* ppd_fr_data = frame_data(ppd_fr);
+        if(!ppd_fr_data)
+            return seL4_NotEnoughMemory;
+        ppd = ppd_fr_data + PD_INDEX(vaddr, pdtype);
     }
     // pin the ppd so that we don't get evicted.
     frame_set_pin(ppd_fr, true);
@@ -430,7 +448,7 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_Word vaddrbegin, seL4_Word va
     if(vaddrend < vaddrbegin)
         return seL4_RangeError;
 
-    if(badge >= MAX_PID || !vspace)
+    if(badge >= CONFIG_SOS_MAX_PID || !vspace)
         return seL4_RangeError;
 
     // find the bucket
@@ -440,9 +458,9 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_Word vaddrbegin, seL4_Word va
 
     ssize_t numpages = (vaddrend - vaddrbegin) >> seL4_PageBits;
 
-    uint16_t indices[4];
+    pd_indices_t indices;
     for(int i = PT_PT; i <= PT_PGD; ++i)
-        indices[i] = PD_INDEX(vaddrbegin, i);
+        indices.arr[i] = PD_INDEX(vaddrbegin, i);
     
     frame_ref_t pud_fr, pd_fr, pt_fr;
     struct pagedir pud, pd, pt;
@@ -455,13 +473,13 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_Word vaddrbegin, seL4_Word va
 
     frame_set_pin(lbk->sh_pgd.dir, true);
     while(numpages) { // PGD
-        ZF_LOGF_IF(indices[PT_PGD] >= 512, "vaddr out of bound");
+        ZF_LOGF_IF(indices.str.pgd >= 512, "vaddr out of bound");
         tmp = frame_data(lbk->sh_pgd.dir);
         if(!tmp) {
             err = seL4_NotEnoughMemory;
             break;
         }
-        pud = tmp[indices[PT_PGD]];
+        pud = tmp[indices.str.pgd];
         if(pud.dir) {
             frame_set_pin(pud.dir, true);
             while(numpages) { // PUD
@@ -470,7 +488,7 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_Word vaddrbegin, seL4_Word va
                     err = seL4_NotEnoughMemory;
                     break;
                 }
-                pd = tmp[indices[PT_PUD]];
+                pd = tmp[indices.str.pud];
                 if(pd.dir) {
                     frame_set_pin(pd.dir, true);
                     while(numpages) { // PD
@@ -479,7 +497,7 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_Word vaddrbegin, seL4_Word va
                             err = seL4_NotEnoughMemory;
                             break;
                         }
-                        pt = tmp[indices[PT_PD]];
+                        pt = tmp[indices.str.pd];
                         if(pt.dir) {
                             ZF_LOGF_IF(!pt.cap, "Page table has frame table but no capability table");
                             frame_set_pin(pt.dir, true);
@@ -490,12 +508,12 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_Word vaddrbegin, seL4_Word va
                                     err = seL4_NotEnoughMemory;
                                     break;
                                 }
-                                fr += indices[PT_PT];
+                                fr += indices.str.pt;
                                 if(*fr) {
                                     // the actual unmapping
                                     frcap = ((seL4_CPtr*)frame_data(pt.cap));
                                     if(frcap) {
-                                        frcap += indices[PT_PT];
+                                        frcap += indices.str.pt;
                                         // any errors would be caused by parent page revoking this
                                         // capability (e.g. due to page out)
                                         seL4_ARM_Page_Unmap(*frcap);
@@ -517,8 +535,8 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_Word vaddrbegin, seL4_Word va
                                     }
                                 }
                                 --numpages;
-                                if(++indices[PT_PT] >= 512) {
-                                    indices[PT_PT] = 0;
+                                if(++indices.str.pt >= 512) {
+                                    indices.str.pt = 0;
                                     break;
                                 }
                             }
@@ -529,27 +547,28 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_Word vaddrbegin, seL4_Word va
                             if(full) {
                                 // free this PT's frame data
                                 free_frame(pt.dir);
+                                pt.dir = 0;
                                 free_frame(pt.cap);
+                                pt.cap = 0;
                                 // unmap this PT and free the UT
                                 if(pd.cap) {
                                     ZF_LOGF_IF(!pd.ut, "shadow PD has cap frame but no ut frame.");
-                                    seL4_CPtr* ptcap = &((seL4_CPtr*)frame_data(pd.cap))[indices[PT_PD]];
+                                    seL4_CPtr* ptcap = &((seL4_CPtr*)frame_data(pd.cap))[indices.str.pd];
                                     if(*ptcap) {
-                                        ZF_LOGF_IF(seL4_ARM_PageTable_Unmap(*ptcap) != seL4_NoError, 
-                                            "Error unmapping PT");
+                                        seL4_Error unmap_error = seL4_ARM_PageTable_Unmap(*ptcap);
                                         cspace_delete(&cspace, *ptcap);
                                         cspace_free_slot(&cspace, *ptcap);
                                         *ptcap = 0;
-                                        ut_free(((ut_t**)frame_data(pd.ut))[indices[PT_PD]]);
+                                        ut_free(((ut_t**)frame_data(pd.ut))[indices.str.pd]);
                                     }
                                 }
                             }
                         } else {
-                            numpages = MAX(0, numpages - (512 - indices[PT_PT]));
-                            indices[PT_PT] = 0;
+                            numpages = MAX(0, numpages - (512 - indices.str.pt));
+                            indices.str.pt = 0;
                         }
-                        if(++indices[PT_PD] >= 512) {
-                            indices[PT_PD] = 0;
+                        if(++indices.str.pd >= 512) {
+                            indices.str.pd = 0;
                             break;
                         }
                     }
@@ -559,31 +578,35 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_Word vaddrbegin, seL4_Word va
                     if(full) {
                         // free this PD's frame data
                         free_frame(pd.dir);
-                        if(pd.cap)
+                        pd.dir = 0;
+                        if(pd.cap) {
                             free_frame(pd.cap);
-                        if(pd.ut)
+                            pd.cap = 0;
+                        }
+                        if(pd.ut) {
                             free_frame(pd.ut);
+                            pd.ut = 0;
+                        }
                         // unmap this PD and free the UT
                         if(pud.cap) {
                             ZF_LOGF_IF(!pud.ut, "shadow PUD has cap frame but no ut frame.");
-                            seL4_CPtr* pdcap = &((seL4_CPtr*)frame_data(pud.cap))[indices[PT_PUD]];
+                            seL4_CPtr* pdcap = &((seL4_CPtr*)frame_data(pud.cap))[indices.str.pud];
                             if(*pdcap) {
-                                ZF_LOGF_IF(seL4_ARM_PageDirectory_Unmap(*pdcap) != seL4_NoError, 
-                                    "Error unmapping PD");
+                                seL4_Error unmap_error = seL4_ARM_PageDirectory_Unmap(*pdcap);
                                 cspace_delete(&cspace, *pdcap);
                                 cspace_free_slot(&cspace, *pdcap);
                                 *pdcap = 0;
-                                ut_free(((ut_t**)frame_data(pud.ut))[indices[PT_PUD]]);
+                                ut_free(((ut_t**)frame_data(pud.ut))[indices.str.pud]);
                             }
                         }
                     }
                 } else {
-                    numpages = MAX(0, numpages - (512 - indices[PT_PT]));
-                    numpages = MAX(0, numpages - (512 - (indices[PT_PD] + 1)) * 512);
-                    indices[PT_PT] = indices[PT_PD] = 0;
+                    numpages = MAX(0, numpages - (512 - indices.str.pt));
+                    numpages = MAX(0, numpages - (512 - (indices.str.pd + 1)) * 512);
+                    indices.str.pt = indices.str.pd = 0;
                 }
-                if(++indices[PT_PUD] >= 512) {
-                    indices[PT_PUD] = 0;
+                if(++indices.str.pud >= 512) {
+                    indices.str.pud = 0;
                     break;
                 }
             }
@@ -593,43 +616,54 @@ seL4_Error grp01_unmap_frame(seL4_Word badge, seL4_Word vaddrbegin, seL4_Word va
             if(full) {
                 // free this PUD's frame data
                 free_frame(pud.dir);
-                if(pud.cap)
+                pud.dir = 0;
+                if(pud.cap) {
                     free_frame(pud.cap);
-                if(pud.ut)
+                    pud.cap = 0;
+                }
+                if(pud.ut) {
                     free_frame(pud.ut);
+                    pud.ut = 0;
+                }
                 // unmap this PD and free the UT
                 if(lbk->sh_pgd.cap) {
                     ZF_LOGF_IF(!lbk->sh_pgd.ut, "shadow PGD has cap frame but no ut frame.");
-                    seL4_CPtr* pudcap = ((seL4_CPtr*)frame_data(lbk->sh_pgd.cap))[indices[PT_PGD]];
+                    seL4_CPtr* pudcap = ((seL4_CPtr*)frame_data(lbk->sh_pgd.cap))[indices.str.pgd];
                     if(*pudcap) {
                         ZF_LOGF_IF(seL4_ARM_PageUpperDirectory_Unmap(*pudcap) != seL4_NoError, 
                             "Error unmapping PUD");
                         cspace_delete(&cspace, *pudcap);
                         cspace_free_slot(&cspace, *pudcap);
                         *pudcap = 0;
-                        ut_free(((ut_t**)frame_data(lbk->sh_pgd.ut))[indices[PT_PGD]]);
+                        ut_free(((ut_t**)frame_data(lbk->sh_pgd.ut))[indices.str.pgd]);
                     }
                 }
             }
         } else {
-            numpages = MAX(0, numpages - (512 - indices[PT_PT]));
-            numpages = MAX(0, numpages - (512 - (indices[PT_PD] + 1)) * 512);
-            numpages = MAX(0, numpages - (512 - (indices[PT_PUD] + 1)) * 512*512);
-            indices[PT_PT] = indices[PT_PD] = indices[PT_PUD] = 0;
+            numpages = MAX(0, numpages - (512 - indices.str.pt));
+            numpages = MAX(0, numpages - (512 - (indices.str.pd + 1)) * 512);
+            numpages = MAX(0, numpages - (512 - (indices.str.pud + 1)) * 512*512);
+            indices.str.pt = indices.str.pd = indices.str.pud = 0;
         }
-        ++indices[PT_PGD];
+        ++indices.str.pgd;
     }
     frame_set_pin(lbk->sh_pgd.dir, false);
 
     // free the PGD and unmap it
     // (however, let the caller unmap the PGD and free its cspace instead)
     if(full) {
-        if(lbk->sh_pgd.dir)
+        if(lbk->sh_pgd.dir) {
             free_frame(lbk->sh_pgd.dir);
-        if(lbk->sh_pgd.cap)
+            lbk->sh_pgd.dir = 0;
+        }
+        if(lbk->sh_pgd.cap) {
             free_frame(lbk->sh_pgd.cap);
-        if(lbk->sh_pgd.ut)
+            lbk->sh_pgd.cap = 0;
+        }
+        if(lbk->sh_pgd.ut) {
             free_frame(lbk->sh_pgd.ut);
+            lbk->sh_pgd.ut = 0;
+        }
     }
 
     // at the moment we have nowhere to go but panic if unmap failed
@@ -677,24 +711,7 @@ void* userptr_read(userptr_t src, size_t len, seL4_Word badge)
     size_t pagecount = ROUND_UP(lennet - 1, PAGE_SIZE_4K) / PAGE_SIZE_4K;
     
     // check if we have enough scratch vmem to handle this
-    sync_mutex_lock(&scratch_lock);
-    if(scratchas.used == 0) {
-        // check if our entire addrspace can be used to fit this request!
-        if(lennet < (VMEM_TOP - SOS_SCRATCH))
-            ret = SOS_SCRATCH;
-    } else {
-        // find an empty region, starting from rearmost!
-        for(int i = scratchas.used - 1; i >= 0; --i) {
-            uintptr_t scregend = ((addrspace_t*)scratchas.data)[i].end;
-            if(lennet < (VMEM_TOP - scregend)) {
-                ret = scregend;
-                break;
-            }
-        }
-    }
-    // our code is designed not to invoke malloc again on scratch space, so ...
-    ZF_LOGF_IF(scratchas.used >= scratchas.capacity, 
-        "Request is going to exceed scratch AS slot.");
+    ret = addrspace_find_free_reg(&scratchas, lennet, SOS_SCRATCH, VMEM_TOP);
 
     // create the AS
     addrspace_t curras;
@@ -709,10 +726,7 @@ void* userptr_read(userptr_t src, size_t len, seL4_Word badge)
             ZF_LOGE("Cannot map scratch address space.");
             ret = 0;
         }
-    }
-    sync_mutex_unlock(&scratch_lock);
-
-    if(!ret)
+    } else
         return NULL;
 
     // map all user pages to the scratch addr space
@@ -821,12 +835,10 @@ void* userptr_read(userptr_t src, size_t len, seL4_Word badge)
         ZF_LOGF_IF(grp01_unmap_frame(0, curras.begin, curras.end, false) != seL4_NoError, 
             "Error unmapping scratch frame");
         // and remove the AS
-        sync_mutex_lock(&scratch_lock);
         // find the index again, as our scratch AS might be moved around while we didn't lock the AS
         int currasidx = addrspace_find(&scratchas, curras.begin);
         ZF_LOGF_IF(currasidx < 0, "Got invalid scratch AS.");
         addrspace_remove(&scratchas, currasidx);
-        sync_mutex_unlock(&scratch_lock);
         return 0;
     }
 
@@ -877,25 +889,8 @@ userptr_write_state_t userptr_write_start(userptr_t src, size_t len, seL4_Word b
 
     // at this point, the given address range should be valid.
     // now create a scratch mapping
-    sync_mutex_lock(&scratch_lock);
     // check if we have enough scratch vmem to handle this
-    if(scratchas.used == 0) {
-        // check if our entire addrspace can be used to fit this request!
-        if(PAGE_SIZE_4K < (VMEM_TOP - SOS_SCRATCH))
-            ret.curr = scratch.begin = SOS_SCRATCH;
-    } else {
-        // find an empty region, starting from rearmost!
-        for(int i = scratchas.used - 1; i >= 0; --i) {
-            uintptr_t scregend = ((addrspace_t*)scratchas.data)[i].end;
-            if(PAGE_SIZE_4K < (VMEM_TOP - scregend)) {
-                ret.curr = scratch.begin = scregend;
-                break;
-            }
-        }
-    }
-    // our code is designed not to invoke malloc again on scratch space, so ...
-    ZF_LOGF_IF(scratchas.used + 1 >= scratchas.capacity, 
-        "Request is going to exceed scratch AS slot.");
+    ret.curr = scratch.begin = addrspace_find_free_reg(&scratchas, PAGE_SIZE_4K, SOS_SCRATCH, VMEM_TOP);
     
     // create the AS
     if(ret.curr) {
@@ -904,8 +899,9 @@ userptr_write_state_t userptr_write_start(userptr_t src, size_t len, seL4_Word b
             ZF_LOGE("Cannot map scratch address space.");
             ret.curr = 0;
         }
-    }
-    sync_mutex_unlock(&scratch_lock);
+    } else 
+        // no space
+        return ret;
 
     // setup offset and remaining bytes
     ret.curr += src % PAGE_SIZE_4K;
@@ -922,11 +918,9 @@ userptr_write_state_t userptr_write_start(userptr_t src, size_t len, seL4_Word b
         // failed. remove the AS.
         // we assume that the frame is not mapped to SOS at it returns an error!
         // however, it might be mapped to user's tho
-        sync_mutex_lock(&scratch_lock);
         int asidx = addrspace_find(&scratchas, scratch.begin);
         ZF_LOGF_IF(asidx < 0, "Scratch map not found.");
         addrspace_remove(&scratchas, asidx);
-        sync_mutex_unlock(&scratch_lock);
 
         ret.curr = 0;
     }
@@ -970,11 +964,27 @@ bool userptr_write_next(userptr_write_state_t* it)
     return true;
 }
 
+char* map_user_string(userptr_t ptr, size_t len, seL4_Word badge, char* originalchar)
+{
+    if(len >= CONFIG_SOS_MAX_FILENAME) {
+        // flat out refuse if filename is too long!
+        ZF_LOGI("Refused to service very long file name.");
+        return NULL;
+    }
+    // WARNING! this function is meant to be called from main thread
+    char* ret = userptr_read(ptr, len + 1, badge);
+    if(!ret)
+        return ret;
+    // set last char to NULL to ensure safety
+    *originalchar = ret[len];
+    ret[len] = 0;
+    return ret;
+}
+
 void userptr_unmap(void* sosaddr)
 {
     assert_main_thread();
 
-    sync_mutex_lock(&scratch_lock);
     int idx = addrspace_find(&scratchas, (uintptr_t)sosaddr);
     if(idx >= 0) {
         addrspace_t* as = (addrspace_t*)scratchas.data + idx;
@@ -982,7 +992,6 @@ void userptr_unmap(void* sosaddr)
             "Error unmapping scratch frame");
         addrspace_remove(&scratchas, idx);
     }
-    sync_mutex_unlock(&scratch_lock);
 }
 
 bool userptr_single_map(uintptr_t local, pd_indices_t useridx, 

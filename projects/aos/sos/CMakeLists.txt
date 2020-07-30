@@ -19,6 +19,18 @@ config_string(SosGateway SOS_GATEWAY "Gateway IP address" DEFAULT "192.168.168.1
 
 config_string(SosFrameLimit SOS_FRAME_LIMIT "Frame table frame limit" UNQUOTE DEFAULT "0ul")
 
+config_string(SosUseFakePageFile SOS_FAKE_PF "Use fake page file" UNQUOTE DEFAULT "0ul")
+
+config_string(SosUseLocalFS SOS_LOCAL_FS "Use local FS on CPIO instead of NFS" UNQUOTE DEFAULT "0ul")
+
+config_string(SosMaxPID SOS_MAX_PID "Maximum number of processes that can run at the same time" UNQUOTE DEFAULT "128ul")
+
+config_string(SosExtraThreads SOS_EXTRA_THREADS "Additional number of internal threads supported beyond those used for user processes" UNQUOTE DEFAULT "8ul")
+
+config_string(SosIntThreadsStackPages SOS_INT_THREADS_STACK_PAGES "Number of pages for each internal SOS stack" UNQUOTE DEFAULT "2ul")
+
+config_string(SosMaxFileName SOS_MAX_FILENAME "Maximum length of filename plus one" UNQUOTE DEFAULT "4096ul")
+
 add_config_library(sos "${configure_string}")
 
 # warn about everything
@@ -30,7 +42,9 @@ add_definitions(-U__linux__)
 add_definitions(-D_SYS_POLL_H)
 
 # list of apps to include in the cpio archive
-get_property(apps GLOBAL PROPERTY apps_property)
+if(NOT SosDisableCPIO)
+    get_property(apps GLOBAL PROPERTY apps_property)
+endif()
 MakeCPIO(archive.o "${apps}")
 
 # add any new c files here
@@ -66,7 +80,6 @@ add_executable(
     src/fileman.c
     src/fs/nullfile.c
     src/fs/console.c
-    src/fs/fakeconsole.c
     src/timesyscall.c
     # GRP01: M3
     src/vm/mapping2.c
@@ -79,6 +92,12 @@ add_executable(
     src/fs/fake.c
     # GRP01: re-arch
     src/proctable.c
+    # GRP01: qemu
+    src/fs/pl011console.c
+    src/fs/cpiofs.c
+    # GRP01: M6
+    src/procman.c
+    src/procsyscall.c
 )
 target_include_directories(sos PRIVATE "include" "../libsosapi/include")
 target_link_libraries(

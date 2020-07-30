@@ -33,3 +33,24 @@ void delegate_free_cap(seL4_CPtr cap, bool del_cap, bool free_slot);
 void delegate_free_ut(ut_t* ut);
 
 void delegate_reuse_reply(seL4_CPtr reply);
+
+frame_ref_t delegate_alloc_frame(void);
+
+void delegate_free_frame(frame_ref_t frame_ref);
+
+bool delegate_frame_set_pin(frame_ref_t frame_ref, bool pin);
+
+void* delegate_frame_data(frame_ref_t frame_ref);
+
+seL4_Error delegate_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_frame_on_delete, bool unpin_on_unmap,
+                     seL4_Word vaddr, seL4_CapRights_t rights, seL4_ARM_VMAttributes attr);
+
+frame_ref_t delegate_get_frame(seL4_Word badge, seL4_Word vaddr);
+
+uintptr_t delegate_allocate_sos_scratch(size_t size);
+
+bool delegate_file_backed_sos_map(sos_filehandle_t* fh, uintptr_t base, size_t size_bytes);
+
+void delegate_free_sos_scratch(uintptr_t base);
+
+void delegate_destroy_process(sos_pid_t pid);

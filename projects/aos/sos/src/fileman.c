@@ -1,23 +1,26 @@
+#include <sos/gen_config.h>
 #include <errno.h>
 #include <stdbool.h>
 #include <string.h>
 #include <stdlib.h>
 #include <utils/zf_log.h>
 #include <utils/zf_log_if.h>
-#include <sync/mutex.h>
 #include <cspace/cspace.h>
 #include <sys/types.h>
+#include <fcntl.h>
 
 #include "utils.h"
 #include "fs/console.h"
 #include "fs/nullfile.h"
 #include "fs/nfs.h"
 #include "fs/fake.h"
+#include "fs/cpiofs.h"
 #include "bgworker.h"
 #include "ut.h"
 #include "grp01.h"
 #include "vm/mapping2.h"
 #include "delegate.h"
+#include "threadassert.h"
 
 #include "fileman.h"
 #include "proctable.h"
@@ -44,11 +47,13 @@ struct fileentry
 struct filetable
 {
     bool used;
+    bool active; // true if there is IO in progress
+    bool pendingdestroy; // true if destroy was called when active was true
+    seL4_CPtr active_mtx; // mutex for activity indicator and pending destroy
     uint16_t ch; // clockhand
     struct fileentry fe[MAX_FH];
 };
 
-// PLAN: GRP01 should be replaced by a hashmap once we have more than one handlers
 struct {
     const char* name;
     struct filehandler handler;
@@ -102,8 +107,12 @@ struct bg_readdir_param {
 };
 
 // local variables declaration area
+struct filetable ft[CONFIG_SOS_MAX_PID];
 
-struct filetable ft[MAX_PID];
+// used to signal main thread if a process has pending IO while killed
+seL4_CPtr io_finish_ep;
+
+struct filehandler* consolehandler;
 
 // local functions declaration area
 void send_and_free_reply_cap(ssize_t response, seL4_CPtr reply);
@@ -121,11 +130,18 @@ struct filehandler * find_handler(const char* fn);
 char* map_user_string(userptr_t ptr, size_t len, seL4_Word badge, char* originalchar);
 void unmap_user_string_bg(char* myptr, size_t len, seL4_Word badge, char originalchar);
 int find_unused_slot(struct filetable* pft);
+void activate_pft(struct filetable* pft);
+void pft_activity_finish(seL4_Word pid);
 
 // function definitions area
 
-bool fileman_init()
+bool fileman_init(cspace_t* srccspace, seL4_CPtr ipc_ep)
 {
+    io_finish_ep = cspace_alloc_slot(&cspace);
+    ZF_LOGF_IF(!io_finish_ep, "Cannot allocate slot for endpoint");
+    ZF_LOGF_IF(cspace_mint(&cspace, io_finish_ep, srccspace, ipc_ep, seL4_AllRights, BADGE_IO_FINISH) != seL4_NoError,
+        "Error minting endpoint");
+
     memset(ft, 0, sizeof(ft));
 
     nullhandler.open = null_fs_open;
@@ -137,6 +153,16 @@ bool fileman_init()
     nullhandler.gdent = null_fs_dirent;
     nullhandler.closedir = null_fs_closedir;
 
+    #if CONFIG_SOS_LOCAL_FS > 0ul
+    defaulthandler.open = cpio_fs_open;
+    defaulthandler.close = cpio_fs_close;
+    defaulthandler.read = cpio_fs_read;
+    defaulthandler.write = cpio_fs_write;
+    defaulthandler.stat = cpio_fs_stat;
+    defaulthandler.opendir = cpio_fs_opendir;
+    defaulthandler.gdent = cpio_fs_dirent;
+    defaulthandler.closedir = cpio_fs_closedir;
+    #else
     defaulthandler.open = grp01_nfs_open;
     defaulthandler.close = grp01_nfs_close;
     defaulthandler.read = grp01_nfs_read;
@@ -145,9 +171,11 @@ bool fileman_init()
     defaulthandler.opendir = grp01_nfs_opendir;
     defaulthandler.gdent = grp01_nfs_dirent;
     defaulthandler.closedir = grp01_nfs_closedir;
+    #endif
     
 
     // install special handlers (console)
+    memset(specialhandlers, 0, sizeof(specialhandlers));
     specialhandlers[0].name = "console";
     specialhandlers[0].handler.open = console_fs_open;
     specialhandlers[0].handler.close = console_fs_close;
@@ -158,6 +186,7 @@ bool fileman_init()
     specialhandlers[0].handler.gdent = null_fs_dirent;
     specialhandlers[0].handler.closedir = null_fs_closedir;
 
+    #if CONFIG_SOS_FAKE_PF > 0ul
     specialhandlers[1].name = "fake";
     specialhandlers[1].handler.open = fake_fs_open;
     specialhandlers[1].handler.close = null_fs_close;
@@ -167,6 +196,10 @@ bool fileman_init()
     specialhandlers[1].handler.opendir = fake_fs_opendir;
     specialhandlers[1].handler.gdent = fake_fs_dirent;
     specialhandlers[1].handler.closedir = null_fs_close;
+    #endif
+
+    consolehandler = find_handler("console");
+    ZF_LOGF_IF(!consolehandler, "Console handler not found");
 
     return true;
 }
@@ -174,32 +207,75 @@ bool fileman_init()
 int fileman_create(seL4_Word pid)
 {
     // the usual error checking
-    if(pid >= MAX_PID)
+    if(pid >= CONFIG_SOS_MAX_PID)
         return EBADF;
     if(ft[pid].used)
         return EEXIST;
 
-    // empty the file table
-    memset(ft[pid].fe, 0, sizeof(ft[pid].fe));
-
-    // by default, stdin/out/err is reserved!
-    for(int i=0; i<=2; ++i) {
-        ft[pid].fe[i].used = true;
-        ft[pid].fe[i].handler = &nullhandler;
+    // create the ntfn for mutex
+    if(!ft[pid].active_mtx) {
+        if(!alloc_retype(&ft[pid].active_mtx, seL4_NotificationObject, seL4_NotificationBits))
+            return ENOMEM;
+        seL4_Signal(ft[pid].active_mtx);
     }
-    
+
+    // stdout and stderr should be initialized to console
+    ssize_t consoleid = consolehandler->open(pid, "console", O_WRONLY);
+    if(consoleid >= 0) {
+        for(int i=1; i<=2; ++i) {
+            ft[pid].fe[i].used = true;
+            ft[pid].fe[i].handler = consolehandler;
+            ft[pid].fe[i].id = consoleid;
+        }
+    } else {
+        ZF_LOGE("Console cannot be opened for PID %d. Expect stdout and stderr to not work.", pid);
+    }
+
     // set the flag to indicate that someone is using this PID
     ft[pid].used = true;
 
     return 0;
 }
 
+bool fileman_destroy(seL4_Word pid) {
+    struct filetable* pft = ft + pid;
+    if(!pft->used)
+        return true;
+    
+    bool carryondestruct = true;
+    seL4_Wait(pft->active_mtx, NULL);
+    if(pft->active) {
+        pft->pendingdestroy = true;
+        carryondestruct = false;
+    }
+    seL4_Signal(pft->active_mtx);
+
+    if(carryondestruct) {
+        struct fileentry* cfe = pft->fe;
+        for(int i=0; i<MAX_FH; ++i, ++cfe) {
+            if(cfe->used) {
+                if(cfe->dir)
+                    cfe->handler->closedir(pid, cfe->id);
+                else
+                    cfe->handler->close(pid, cfe->id);
+                cfe->used = false;
+            }
+        }
+        pft->active = pft->pendingdestroy = pft->used = false;
+        pft->ch = 0;
+    }
+    return carryondestruct;
+}
+
 int fileman_open(seL4_Word pid, seL4_CPtr reply, userptr_t filename, size_t filename_len, bool dir, int mode)
 {
     // error checking
     // bad pid
-    if((pid >= MAX_PID) || (!ft[pid].used))
+    if((pid >= CONFIG_SOS_MAX_PID) || (!ft[pid].used))
         return EBADF * -1;
+
+    struct filetable* pft = ft + pid;
+    ZF_LOGF_IF(!pft->used, "PID unused!");
 
     // prepare for run the open in background
     struct bg_open_param * param = malloc(sizeof(struct bg_open_param));
@@ -216,6 +292,8 @@ int fileman_open(seL4_Word pid, seL4_CPtr reply, userptr_t filename, size_t file
     param->pid = pid;
     param->reply = reply;
 
+    activate_pft(pft);
+
     bgworker_enqueue_callback(pid, bg_fileman_open, param);
     return 0;
 }
@@ -223,8 +301,13 @@ int fileman_open(seL4_Word pid, seL4_CPtr reply, userptr_t filename, size_t file
 int fileman_close(seL4_Word pid, seL4_CPtr reply, int fh)
 {
     // basic error check
-    if((pid >= MAX_PID) || (!ft[pid].used))
+
+    if((pid >= CONFIG_SOS_MAX_PID) || (!ft[pid].used))
         return 1;
+    
+    struct filetable* pft = ft + pid;
+    ZF_LOGF_IF(!pft->used, "PID unused!");
+
     if((fh < 0) || fh >= MAX_FH)
         return 1;
 
@@ -235,6 +318,8 @@ int fileman_close(seL4_Word pid, seL4_CPtr reply, int fh)
     param->pid = pid;
     param->fh = fh;
     param->reply = reply;
+
+    activate_pft(pft);
 
     bgworker_enqueue_callback(pid, bg_fileman_close, param);
     return 0;
@@ -252,10 +337,12 @@ int fileman_read(seL4_Word pid, int fh, seL4_CPtr reply, userptr_t buff, uint32_
 
 int fileman_rw_dispatch(bool read, seL4_Word pid, int fh, seL4_CPtr reply, userptr_t buff, uint32_t len)
 {
-    // error checking
     // bad pid
-    if((pid >= MAX_PID) || (!ft[pid].used))
+    if((pid >= CONFIG_SOS_MAX_PID) || (!ft[pid].used))
         return EBADF * -1;
+    
+    struct filetable* pft = ft + pid;
+    ZF_LOGF_IF(!pft->used, "PID unused!");
 
     // bad fh
     if((fh < 0) || fh >= MAX_FH)
@@ -272,14 +359,19 @@ int fileman_rw_dispatch(bool read, seL4_Word pid, int fh, seL4_CPtr reply, userp
     param->len = len;
     param->reply = reply;
 
+    activate_pft(pft);
+
     bgworker_enqueue_callback(pid, bg_fileman_rw, param);
     return 0;
 }
 
 int fileman_stat(seL4_Word pid, seL4_CPtr reply, userptr_t filename, size_t filename_len)
 {
-    if(pid >= MAX_PID)
+    if(pid >= CONFIG_SOS_MAX_PID)
         return -EINVAL;
+
+    struct filetable* pft = ft + pid;
+    ZF_LOGF_IF(!pft->used, "PID unused!");
     
     struct bg_stat_param * param = malloc(sizeof(struct bg_stat_param));
     if(!param)
@@ -295,14 +387,19 @@ int fileman_stat(seL4_Word pid, seL4_CPtr reply, userptr_t filename, size_t file
     param->pid = pid;
     param->reply = reply;
 
+    activate_pft(pft);
+
     bgworker_enqueue_callback(pid, bg_fileman_stat, param);
     return 0;
 }
 
 int fileman_readdir(seL4_Word pid, int fh, seL4_CPtr reply, size_t pos, userptr_t buff, size_t bufflen)
 {
-    if(pid >= MAX_PID)
+    if(pid >= CONFIG_SOS_MAX_PID)
         return -EINVAL;
+
+    struct filetable* pft = ft + pid;
+    ZF_LOGF_IF(!pft->used, "PID unused!");
 
     struct bg_readdir_param * param = malloc(sizeof(struct bg_readdir_param));
     if(!param)
@@ -314,6 +411,8 @@ int fileman_readdir(seL4_Word pid, int fh, seL4_CPtr reply, size_t pos, userptr_
     param->pos = pos;
     param->fh = fh;
     param->reply = reply;
+
+    activate_pft(pft);
 
     bgworker_enqueue_callback(pid, bg_fileman_readdir, param);
     return 0;
@@ -378,6 +477,7 @@ void bg_fileman_open(void* data)
     ret = slot;
 
 finish:
+    pft_activity_finish(param->pid);
     unmap_user_string_bg(param->filename, param->filename_len, param->pid,
         param->filename_term);
     send_and_free_reply_cap(ret, param->reply);
@@ -426,6 +526,7 @@ void bg_fileman_rw(void* data)
         pfe->offset += ret;
 
 finish:
+    pft_activity_finish(param->pid);
     send_and_free_reply_cap(ret, param->reply);
     free(param);
 }
@@ -446,6 +547,7 @@ void bg_fileman_close(void* data)
     }
     
     //finish:
+    pft_activity_finish(param->pid);
     send_and_free_reply_cap(1, param->reply);
     free(param);
 }
@@ -461,6 +563,7 @@ void bg_fileman_stat(void* data)
     ssize_t err = handler->stat(param->pid, param->filename, &target.st);
 
 finish:
+    pft_activity_finish(param->pid);
     unmap_user_string_bg(param->filename, param->filename_len, param->pid,
         param->filename_term);
     if(err)
@@ -522,6 +625,7 @@ void bg_fileman_readdir(void* data)
     delegate_userptr_unmap(startptr);
 
 finish:
+    pft_activity_finish(param->pid);
     send_and_free_reply_cap(ret, param->reply);
     free(param);
 }
@@ -608,28 +712,13 @@ ssize_t fileman_read_broker(struct filehandler* fh, ssize_t id, userptr_t ptr, s
 struct filehandler * find_handler(const char* fn)
 {
     for(int i=0; i<SPECIAL_HANDLERS; ++i) {
+        if(!specialhandlers[i].name)
+            break;
         if(strcmp(fn, specialhandlers[i].name) == 0) 
             return &specialhandlers[i].handler;
     }
     
     return &defaulthandler;
-}
-
-char* map_user_string(userptr_t ptr, size_t len, seL4_Word badge, char* originalchar)
-{
-    if(len >= MAX_FILENAME) {
-        // flat out refuse if filename is too long!
-        ZF_LOGI("Refused to service very long file name.");
-        return NULL;
-    }
-    // WARNING! this function is meant to be called from main thread
-    char* ret = userptr_read(ptr, len + 1, badge);
-    if(!ret)
-        return ret;
-    // set last char to NULL to ensure safety
-    *originalchar = ret[len];
-    ret[len] = 0;
-    return ret;
 }
 
 void unmap_user_string_bg(char* myptr, size_t len, seL4_Word badge, char originalchar)
@@ -653,4 +742,31 @@ int find_unused_slot(struct filetable* pft)
     }
 
     return slot;
+}
+
+void activate_pft(struct filetable* pft) 
+{
+    // all process are single threaded so this is impossible
+    ZF_LOGF_IF(pft->active, "Attempt to activate an active IO process.");
+    pft->active = true;
+}
+
+void pft_activity_finish(seL4_Word pid)
+{
+    assert_non_main_thread();
+
+    bool pendingdestroy;
+    struct filetable* pft = ft + pid;
+    seL4_Wait(pft->active_mtx, NULL);
+    ZF_LOGF_IF(!pft->active, "IO active flag not locked");
+    pft->active = false;
+    pendingdestroy = pft->pendingdestroy;
+    seL4_Signal(pft->active_mtx);
+
+    if(pendingdestroy) {
+        seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 1);
+        seL4_SetMR(0, pid);
+        // this function is expected to be called from a background thread
+        seL4_Call(io_finish_ep, msg);
+    }
 }

@@ -36,7 +36,7 @@ typedef struct {
 void grp01_map_bookkeep_init(void);
 
 // Initialize a bookeeping structure for mapping frames.
-bool grp01_map_init(seL4_Word badge, seL4_CPtr vspace);
+void grp01_map_init(seL4_Word badge, seL4_CPtr vspace);
 
 // destroy the bookeeping structure for mapping frames, as well as destroying 
 // the intermediate page tables created by the grp01_map_frame function.
@@ -66,6 +66,11 @@ userptr_write_state_t userptr_write_start(userptr_t src, size_t len, seL4_Word b
 // @return false if error occured (e.g. cannot map frame)
 //         otherwise, return true, even if no action is carried
 bool userptr_write_next(userptr_write_state_t* it);
+
+// map user supplied string. length cannot exceed the configured MAX_FILENAME.
+// if success, return value is guaranteed to be NULL terminated.
+// @param originalchar = stores the original terminating character.
+char* map_user_string(userptr_t ptr, size_t len, seL4_Word badge, char* originalchar);
 
 // Unmap and destroy the scratch address space that contains the given pointer.
 void userptr_unmap(void* sosaddr);

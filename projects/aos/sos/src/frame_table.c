@@ -14,6 +14,7 @@
 #include "vmem_layout.h"
 #include "fileman.h"
 #include "threadassert.h"
+#include "vm/addrspace.h"
 
 #include <assert.h>
 #include <string.h>
@@ -21,6 +22,7 @@
 #include <utils/util.h>
 #include <sos/gen_config.h>
 #include <grp01/bitfield.h>
+#include <fcntl.h>
 
 /* Debugging macro to get the human-readable name of a particular list. */
 #define LIST_NAME(list) LIST_ID_NAME(list->list_id)
@@ -113,18 +115,11 @@ static struct {
     .clockhand = NULL_FRAME
 };
 
-static struct {
-    struct filehandler fh;
-    ssize_t id;
-} page_file = {0};
+sos_filehandle_t page_file = {0};
 
 /* Convenience functions/macros to access data */
 #define FRAME_PAGE_CAP(idx) (frame_table.cap_frames[(idx)/PAGE_CAP_CONT_CAPACITY].\
     data[(idx)%PAGE_CAP_CONT_CAPACITY])
-
-// bitmap represented as pointer to uint64_t
-#define GET_BMP(arr, idx) (((arr)[(idx)/64] & (1ULL << ((idx)%64ULL))) && true)
-#define TOGGLE_BMP(arr, idx) ((arr)[(idx)/64] ^= (1ULL << ((idx)%64ULL)))
 
 #define GET_FRAME_CAP_STATUS(idx) (GET_BMP(frame_table.cap_frames[(idx)/PAGE_CAP_CONT_CAPACITY].\
     bmpfree, (idx)%PAGE_CAP_CONT_CAPACITY))
@@ -177,10 +172,13 @@ void frame_table_init(cspace_t *cspace, seL4_CPtr vspace)
 
 void frame_table_init_page_file()
 {
-    // page_file.fh = *find_handler("fake");
-    // page_file.id = page_file.fh.open(0, "fake", 7);
-    page_file.fh = *find_handler("pf");
-    page_file.id = page_file.fh.open(0, "pf", 7);
+    #if CONFIG_SOS_FAKE_PF > 0ul
+    page_file.fh = find_handler("fake");
+    page_file.id = page_file.fh->open(0, "fake", O_RDWR);
+    #else
+    page_file.fh = find_handler("pf");
+    page_file.id = page_file.fh->open(0, "pf", O_RDWR);
+    #endif
 }
 
 cspace_t *frame_table_cspace(void)
@@ -241,6 +239,11 @@ void free_frame(frame_ref_t frame_ref)
         // unpin the frame if needed
         frame->pinned = false;
 
+        // also unmark this frame as file backed if it was file backed
+        // it is caller's responsibility to close the file handle
+        frame->file_backed = false;
+        frame->file_pos = frame->file_backer = 0;
+
         remove_frame(&frame_table.allocated, frame);
         push_front(&frame_table.free, frame);
 
@@ -270,17 +273,26 @@ static size_t frame_mem_page_idx(frame_ref_t frame_ref)
                 memset((void*)(SOS_FRAME_DATA + pageidx * PAGE_SIZE_4K), 0, PAGE_SIZE_4K);
                 frame->reqempty = false;
             } else if (frame->backed && frame->paged) {
-                // restore from PF
-                ssize_t rdres = page_file.fh.read(0, page_file.id, frame_table.frame_data[pageidx],
-                    frame->back_idx * PAGE_SIZE_4K, PAGE_SIZE_4K);
-                // should the read is failed for any reason, we'll panic!
-                ZF_LOGF_IF(rdres != PAGE_SIZE_4K, "Error reading from page file: got %lld instead of %lld",
-                    rdres, PAGE_SIZE_4K);
-                // free the page space
-                frame->paged = false;
-                // mark the backing page file as free
-                assert(GET_BMP(frame_table.pf_bmp, frame->back_idx));
-                TOGGLE_BMP(frame_table.pf_bmp, frame->back_idx);
+                if(frame->file_backed) {
+                    // restore from the backed file
+                    sos_filehandle_t* fh = (void*)frame->file_backer;
+                    ssize_t rd = fh->fh->read(0, fh->id,frame_table.frame_data[pageidx], frame->file_pos * PAGE_SIZE_4K, PAGE_SIZE_4K);
+                    ZF_LOGE_IF(rd <= 0, "Read file backed by file returned: %lld", rd);
+                } else {
+                    // restore from PF
+                    ssize_t rdres = page_file.fh->read(0, page_file.id, frame_table.frame_data[pageidx],
+                        frame->back_idx * PAGE_SIZE_4K, PAGE_SIZE_4K);
+                    // should the read is failed for any reason, we'll bail out!
+                    // we also consider unfulfilled reads as a failure as well ...
+                    if(rdres != PAGE_SIZE_4K) {
+                        ZF_LOGE("Error reading from page file: got %lld instead of %lld",
+                            rdres, PAGE_SIZE_4K);
+                        return 0;
+                    }
+                    // mark the backing page file as free
+                    assert(GET_BMP(frame_table.pf_bmp, frame->back_idx));
+                    TOGGLE_BMP(frame_table.pf_bmp, frame->back_idx);
+                }
             }
             frame->back_idx = pageidx;
             frame->backed = true;
@@ -651,6 +663,9 @@ static seL4_ARM_Page alloc_frame_at(uintptr_t vaddr)
 
 bool frame_set_pin(frame_ref_t frame_ref, bool pin)
 {
+    // avoid race condition with frame evictor
+    assert_main_thread();
+    
     frame_t* fr = frame_from_ref(frame_ref);
     bool ret = fr->pinned;
     fr->pinned = pin;
@@ -668,54 +683,89 @@ bool page_out_frame(frame_ref_t frame_ref)
     if(fr->pinned)
         return false;
     if(fr->backed && !fr->paged) {
-        // find the first free page file slot
-        ssize_t free_slot;
-        for(int retry = 0;; ++retry) {
-            free_slot = bitfield_first_free(frame_table.pf_bmp_count, frame_table.pf_bmp);
-            if(free_slot < 0) {
-                if(retry) {
-                    ZF_LOGE("Ran out of page file bitmap space!");
-                    // we've tried allocating before. no dice. so bail out!
-                    return false;
-                }
-                // try reallocating frame for PF
-                assert((frame_table.pf_bmp_count * sizeof(uint64_t)) % PAGE_SIZE_4K == 0);
-                uintptr_t vaddr = frame_table.pf_bmp + frame_table.pf_bmp_count;
-                seL4_ARM_Page cptr = alloc_frame_at(vaddr);
-                if(cptr == seL4_CapNull) {
-                    ZF_LOGE("Failed to allocate frame to store page file bitmap space");
-                    return false;
-                }
-                memset((void*)vaddr, 0, PAGE_SIZE_4K);
-                // if this is the first allocation, set the sentinel 0th entry to 0
-                if(!frame_table.pf_bmp_count) {
-                    TOGGLE_BMP(frame_table.pf_bmp, 0);
-                    assert(GET_BMP(frame_table.pf_bmp, 0));
-                }
-                frame_table.pf_bmp_count += PAGE_SIZE_4K / sizeof(uint64_t);
-            } else
-                break;
-        }
-        // page out frame to file
-        ssize_t wrres = page_file.fh.write(0, page_file.id, frame_table.frame_data[fr->back_idx], 
-            free_slot * PAGE_SIZE_4K, PAGE_SIZE_4K);
-        if(wrres != PAGE_SIZE_4K) {
-            ZF_LOGE("Page file write error. Got %lld instead of %lld.", wrres, PAGE_SIZE_4K);
-            return false;
+        // since we're only supporting read only file maps, we won't write anything to the
+        // backing file upon page out.
+        size_t phy_frame_idx = fr->back_idx;
+        if(!fr->file_backed) {
+            // find the first free page file slot
+            ssize_t free_slot;
+            for(int retry = 0;; ++retry) {
+                free_slot = bitfield_first_free(frame_table.pf_bmp_count, frame_table.pf_bmp);
+                if(free_slot < 0) {
+                    if(retry) {
+                        ZF_LOGE("Ran out of page file bitmap space!");
+                        // we've tried allocating before. no dice. so bail out!
+                        return false;
+                    }
+                    // try reallocating frame for PF
+                    assert((frame_table.pf_bmp_count * sizeof(uint64_t)) % PAGE_SIZE_4K == 0);
+                    uintptr_t vaddr = frame_table.pf_bmp + frame_table.pf_bmp_count;
+                    seL4_ARM_Page cptr = alloc_frame_at(vaddr);
+                    if(cptr == seL4_CapNull) {
+                        ZF_LOGE("Failed to allocate frame to store page file bitmap space");
+                        return false;
+                    }
+                    memset((void*)vaddr, 0, PAGE_SIZE_4K);
+                    // if this is the first allocation, set the sentinel 0th entry to 0
+                    if(!frame_table.pf_bmp_count) {
+                        TOGGLE_BMP(frame_table.pf_bmp, 0);
+                        assert(GET_BMP(frame_table.pf_bmp, 0));
+                    }
+                    frame_table.pf_bmp_count += PAGE_SIZE_4K / sizeof(uint64_t);
+                } else
+                    break;
+            }
+            // page out frame to file
+            ssize_t wrres = page_file.fh->write(0, page_file.id, frame_table.frame_data[fr->back_idx], 
+                free_slot * PAGE_SIZE_4K, PAGE_SIZE_4K);
+            if(wrres != PAGE_SIZE_4K) {
+                ZF_LOGE("Page file write error. Got %lld instead of %lld.", wrres, PAGE_SIZE_4K);
+                return false;
+            }
+            
+            // change the index to page file's instead
+            fr->back_idx = free_slot;
+
+            // and mark the page file area as used
+            assert(!GET_BMP(frame_table.pf_bmp, free_slot));
+            TOGGLE_BMP(frame_table.pf_bmp, free_slot);
+        } else {
+            fr->back_idx = fr->file_pos;
         }
         // write OK. now mark the memory frame as free
-        assert(GET_FRAME_CAP_STATUS(fr->back_idx));
-        TOGGLE_FRAME_CAP_FREE(fr->back_idx);
-        // and mark the page file area as used
-        assert(!GET_BMP(frame_table.pf_bmp, free_slot));
-        TOGGLE_BMP(frame_table.pf_bmp, free_slot);
+        assert(GET_FRAME_CAP_STATUS(phy_frame_idx));
+        TOGGLE_FRAME_CAP_FREE(phy_frame_idx);
 
         // invalidate the frame so that all derived caps are removed, and maps are unmapped
-        cspace_revoke(frame_table.cspace, FRAME_PAGE_CAP(fr->back_idx).cap);
+        cspace_revoke(frame_table.cspace, FRAME_PAGE_CAP(phy_frame_idx).cap);
 
         // and mark the frame object as such
-        fr->back_idx = free_slot;
         fr->paged = true;
     }
     return true;
+}
+
+void frame_set_file_backing(frame_ref_t frame_ref, sos_filehandle_t* backer, size_t page_offset)
+{
+    assert((uintptr_t)backer < BIT(FILE_BACKER_PTR_BITS));
+    assert(page_offset < BIT(FILE_OFFSET_BITS));
+
+    frame_t* fr = frame_from_ref(frame_ref);
+    // we don't support setting a frame backing twice
+    assert(!fr->file_backed);
+    assert(!fr->pinned);
+
+    fr->file_backer = backer;
+    fr->file_pos = page_offset;
+    fr->file_backed = true;
+
+    if(!fr->backed)
+        // mark this so that next time a fault happens, IO operation will occur instead
+        fr->paged = fr->backed = true;
+    else {
+        // if this frame is resident, discard whatever in it
+        // remember that we only support read only here
+        if(!fr->paged) 
+            page_out_frame(frame_ref);
+    }
 }
