@@ -173,7 +173,7 @@ void frame_table_init(cspace_t *cspace, seL4_CPtr vspace)
 void frame_table_init_page_file()
 {
     #if CONFIG_SOS_FAKE_PF > 0ul
-    page_file.fh = *find_handler("fake");
+    page_file.fh = find_handler("fake");
     page_file.id = page_file.fh->open(0, "fake", O_RDWR);
     #else
     page_file.fh = find_handler("pf");
