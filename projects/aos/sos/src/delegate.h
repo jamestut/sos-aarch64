@@ -53,4 +53,4 @@ bool delegate_file_backed_sos_map(sos_filehandle_t* fh, uintptr_t base, size_t s
 
 void delegate_free_sos_scratch(uintptr_t base);
 
-void delegate_destroy_process(seL4_CPtr pid);
+void delegate_destroy_process(sos_pid_t pid);

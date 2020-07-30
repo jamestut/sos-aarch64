@@ -178,12 +178,12 @@ void user_start_process_bg(void* pparam)
     struct user_start_process_bg_param* param = pparam;
     proctable_t* pt = proctable + param->pid;
     bool success = start_process_load_elf(param->pid);
-    
-    if(!success)
-        destroy_process(param->pid);
 
     pt->loader_state.filename[param->filename_termpos - 1] = param->filename_term;
     delegate_userptr_unmap(pt->loader_state.filename);
+    
+    if(!success)
+        delegate_destroy_process(param->pid);
 
     seL4_CPtr reply = param->reply;
     uint32_t newpid = param->pid;

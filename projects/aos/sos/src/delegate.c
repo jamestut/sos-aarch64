@@ -2,6 +2,7 @@
 #include "utils.h"
 #include "network.h"
 #include "vmem_layout.h"
+#include "procman.h"
 
 #include <utils/arith.h>
 
@@ -27,6 +28,7 @@ typedef enum {
     INT_THRDREQ_SOS_FILE_MAP,
     INT_THRDREQ_SOS_ALLOC_SCRATCH,
     INT_THRDREQ_SOS_FREE_SCRATCH,
+    INT_THRDREQ_PROCMAN_DESTROY_PROC,
     
     // sentinel value
     INT_THRDREQ_COUNT
@@ -69,6 +71,8 @@ void hdl_sos_alloc_scratch(seL4_CPtr reply);
 
 void hdl_sos_free_scratch(seL4_CPtr reply);
 
+void hdl_procman_destroy_proc(seL4_CPtr reply);
+
 // WARNING: order of declaration must follow that of IntThreadReq
 struct {
     void (*handler)(seL4_CPtr);
@@ -91,6 +95,7 @@ struct {
     {hdl_sos_file_map, INT_THRDREQ_SOS_FILE_MAP, 4},
     {hdl_sos_alloc_scratch, INT_THRDREQ_SOS_ALLOC_SCRATCH, 2},
     {hdl_sos_free_scratch, INT_THRDREQ_SOS_FREE_SCRATCH, 2},
+    {hdl_procman_destroy_proc, INT_THRDREQ_PROCMAN_DESTROY_PROC, 2},
 };
 
 /* ---- definitions start here ---- */
@@ -255,6 +260,14 @@ void delegate_free_sos_scratch(uintptr_t base)
     seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 2);
     seL4_SetMR(0, INT_THRDREQ_SOS_FREE_SCRATCH);
     seL4_SetMR(1, base);
+    seL4_Call(delegate_ep, msg);
+}
+
+void delegate_destroy_process(sos_pid_t pid)
+{
+    seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 2);
+    seL4_SetMR(0, INT_THRDREQ_PROCMAN_DESTROY_PROC);
+    seL4_SetMR(1, pid);
     seL4_Call(delegate_ep, msg);
 }
 
@@ -458,5 +471,11 @@ void hdl_sos_free_scratch(seL4_CPtr reply)
         grp01_unmap_frame(0, as->begin, as->end, false);
         addrspace_remove(&scratchas, asidx);
     }
+    hdl_do_nothing(reply);
+}
+
+void hdl_procman_destroy_proc(seL4_CPtr reply)
+{
+    destroy_process(seL4_GetMR(1));
     hdl_do_nothing(reply);
 }
