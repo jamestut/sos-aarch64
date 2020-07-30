@@ -29,6 +29,7 @@ typedef struct {
 
     ut_t* stack_frame_uts[CONFIG_SOS_INT_THREADS_STACK_PAGES];
     seL4_CPtr stack_frame_caps[CONFIG_SOS_INT_THREADS_STACK_PAGES];
+    uintptr_t sp;
 
     seL4_CPtr fault_ep;
 
@@ -46,10 +47,12 @@ typedef void thread_main_f(void *);
 extern __thread sos_thread_t *current_thread;
 
 void init_threads(seL4_CPtr ep, seL4_CPtr sched_ctrl_start_, seL4_CPtr sched_ctrl_end_);
-sos_thread_t *thread_create(thread_main_f function, void *arg, const char* name, seL4_Word badge, bool resume, seL4_CPtr ep, seL4_Word prio);
+sos_thread_t *thread_create(thread_main_f function, void *arg, const char* name, seL4_Word badge, bool resume, seL4_CPtr ep, seL4_Word prio, bool is_system, seL4_Word system_stack_pages);
 int thread_suspend(sos_thread_t *thread);
 int thread_resume(sos_thread_t *thread);
 void thread_destroy(sos_thread_t* thread);
 
 // badge will be used for badging fault endpoint
 sos_thread_t *spawn(thread_main_f function, void *arg, const char* name, seL4_Word badge, seL4_CPtr ep, seL4_Word prio);
+
+sos_thread_t *spawn_system(thread_main_f function, void *arg, const char* name, seL4_CPtr ep, seL4_Word prio, seL4_Word stack_pages);

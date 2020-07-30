@@ -61,25 +61,47 @@ void init_threads(seL4_CPtr ep, seL4_CPtr sched_ctrl_start_, seL4_CPtr sched_ctr
     set_thread_active(0, true);
 }
 
-static bool alloc_stack(sos_thread_t* thread)
+static bool alloc_stack(sos_thread_t* thread, bool is_system, seL4_Word system_stack_pages, uintptr_t* sp)
 {
-    uintptr_t sp = SOS_THRD_STACK_TOP(thread);
-    for (int i = 0; i < CONFIG_SOS_INT_THREADS_STACK_PAGES; i++) {
-        // already have a frame allocated here.
-        if(thread->stack_frame_uts[i])
-            continue;
+    static uintptr_t curr_stack = SOS_STACK + SOS_STACK_PAGES * PAGE_SIZE_4K;
 
-        thread->stack_frame_uts[i] = alloc_retype(&thread->stack_frame_caps[i], seL4_ARM_SmallPageObject, seL4_PageBits);
-        if (thread->stack_frame_uts[i] == NULL) {
+    uint32_t stack_pages = is_system ? system_stack_pages : CONFIG_SOS_INT_THREADS_STACK_PAGES;
+
+    // add a guard page
+    curr_stack += PAGE_SIZE_4K;
+    *sp = (curr_stack += stack_pages * PAGE_SIZE_4K);
+
+    for (int i = 0; i < stack_pages; i++) {
+        // only bookkeep ut if the thread is not system (ephemeral)
+        ut_t* system_frame_ut;
+        seL4_CPtr system_frame_cap;
+
+        ut_t** frame_ut_ptr;
+        seL4_CPtr* frame_cap_ptr;
+
+        if(!is_system) {
+            frame_ut_ptr = thread->stack_frame_uts + i;
+            frame_cap_ptr = thread->stack_frame_caps + i;
+
+            // already have a frame allocated here.
+            if(*frame_ut_ptr)
+                continue;
+        } else {
+            frame_ut_ptr = &system_frame_ut;
+            frame_cap_ptr = &system_frame_cap;
+        }
+
+        *frame_ut_ptr = alloc_retype(frame_cap_ptr, seL4_ARM_SmallPageObject, seL4_PageBits);
+        if (*frame_ut_ptr == NULL) {
             ZF_LOGE("Failed to allocate stack page");
             return false;
         }
-        
-        seL4_Error err = map_frame(&cspace, thread->stack_frame_caps[i], seL4_CapInitThreadVSpace,
-                                   sp - (i + 1) * PAGE_SIZE_4K, seL4_AllRights, seL4_ARM_Default_VMAttributes);
+
+        seL4_Error err = map_frame(&cspace, *frame_cap_ptr, seL4_CapInitThreadVSpace,
+                                *sp - (i + 1) * PAGE_SIZE_4K, seL4_AllRights, seL4_ARM_Default_VMAttributes);
         if (err != seL4_NoError) {
             ZF_LOGE("Failed to map stack");
-            cap_ut_dealloc(thread->stack_frame_caps + i, thread->stack_frame_uts + i);
+            cap_ut_dealloc(frame_cap_ptr, frame_ut_ptr);
             return false;
         }
     }
@@ -110,7 +132,7 @@ static void thread_trampoline(sos_thread_t *thread, thread_main_f *function, voi
 /*
  * Spawn a new kernel (SOS) thread to execute function with arg
  */
-sos_thread_t *thread_create(thread_main_f function, void *arg, const char* name, seL4_Word badge, bool resume, seL4_CPtr ep, seL4_Word prio)
+sos_thread_t *thread_create(thread_main_f function, void *arg, const char* name, seL4_Word badge, bool resume, seL4_CPtr ep, seL4_Word prio, bool is_system, seL4_Word system_stack_pages)
 {
     assert_main_thread();
     seL4_Word err;
@@ -168,21 +190,25 @@ sos_thread_t *thread_create(thread_main_f function, void *arg, const char* name,
     /* allocate a new slot in the target cspace which we will mint a badged endpoint cap into --
      * the badge is used to identify the process, which will come in handy when you have multiple
      * processes. */
-    new_thread->fault_ep = cspace_alloc_slot(&cspace);
-    if (new_thread->fault_ep == seL4_CapNull) {
-        ZF_LOGE("Failed to alloc user ep slot");
-        goto on_error;
-    }
+    // system threads won't have a fault ep: if they fault, SOS will crash
+    if(!is_system) {
+        new_thread->fault_ep = cspace_alloc_slot(&cspace);
+        if (new_thread->fault_ep == seL4_CapNull) {
+            ZF_LOGE("Failed to alloc user ep slot");
+            goto on_error;
+        }
 
-    /* now mutate the cap, thereby setting the badge */
-    err = cspace_mint(&cspace, new_thread->fault_ep, &cspace, ep, seL4_AllRights,
-                                badge);
-    if (err) {
-        cspace_free_slot(&cspace, new_thread->fault_ep);
+        /* now mutate the cap, thereby setting the badge */
+        err = cspace_mint(&cspace, new_thread->fault_ep, &cspace, ep, seL4_AllRights,
+                                    badge);
+        if (err) {
+            cspace_free_slot(&cspace, new_thread->fault_ep);
+            new_thread->fault_ep = 0;
+            ZF_LOGE("Failed to mint user ep");
+            goto on_error;
+        }
+    } else
         new_thread->fault_ep = 0;
-        ZF_LOGE("Failed to mint user ep");
-        goto on_error;
-    }
 
     /* Create a new TCB object */
     new_thread->tcb_ut = alloc_retype(&new_thread->tcb, seL4_TCBObject, seL4_TCBBits);
@@ -240,17 +266,18 @@ sos_thread_t *thread_create(thread_main_f function, void *arg, const char* name,
     NAME_THREAD(new_thread->tcb, name);
 
     /* set up the stack */
-    if (!alloc_stack(new_thread)) {
-        goto on_error;
+    // sp is top of the stack
+    if(!new_thread->sp) {
+        if (!alloc_stack(new_thread, is_system, system_stack_pages, &new_thread->sp)) {
+            new_thread->sp = 0;
+            goto on_error;
+        }
     }
-
-    // top of the stack
-    seL4_Word sp = SOS_THRD_STACK_TOP(new_thread);
 
     /* set initial context */
     seL4_UserContext context = {
         .pc = (seL4_Word) thread_trampoline,
-        .sp = sp,
+        .sp = new_thread->sp,
         .x0 = (seL4_Word) new_thread,
         .x1 = (seL4_Word) function,
         .x2 = (seL4_Word) arg,
@@ -302,7 +329,12 @@ void thread_destroy(sos_thread_t* thread)
 
 sos_thread_t *spawn(thread_main_f function, void *arg, const char* name, seL4_Word badge, seL4_CPtr ep, seL4_Word prio)
 {
-    return thread_create(function, arg, name, badge, true, ep == seL4_CapNull ? ipc_ep : ep, prio);
+    return thread_create(function, arg, name, badge, true, ep == seL4_CapNull ? ipc_ep : ep, prio, false, 0);
+}
+
+sos_thread_t *spawn_system(thread_main_f function, void *arg, const char* name, seL4_CPtr ep, seL4_Word prio, seL4_Word stack_pages)
+{
+    return thread_create(function, arg, name, 0, true, ep == seL4_CapNull ? ipc_ep : ep, prio, true, stack_pages);
 }
 
 static void set_thread_active(int index, bool active)
