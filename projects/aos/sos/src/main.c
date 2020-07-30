@@ -379,6 +379,7 @@ NORETURN void syscall_loop(seL4_CPtr ep)
 
 void sos_reuse_reply(seL4_CPtr reply)
 {
+    assert_main_thread();
     ZF_LOGF_IF(REPLY_OBJ_FULL, "Reply object array is full on REPLY_RET");
     replyobjs.data[replyobjs.prodpos] = reply;
     replyobjs.prodpos = REPLY_POS_INC(replyobjs.prodpos);
