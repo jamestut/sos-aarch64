@@ -685,6 +685,7 @@ bool page_out_frame(frame_ref_t frame_ref)
     if(fr->backed && !fr->paged) {
         // since we're only supporting read only file maps, we won't write anything to the
         // backing file upon page out.
+        size_t phy_frame_idx = fr->back_idx;
         if(!fr->file_backed) {
             // find the first free page file slot
             ssize_t free_slot;
@@ -721,19 +722,22 @@ bool page_out_frame(frame_ref_t frame_ref)
                 ZF_LOGE("Page file write error. Got %lld instead of %lld.", wrres, PAGE_SIZE_4K);
                 return false;
             }
-            // write OK. now mark the memory frame as free
-            assert(GET_FRAME_CAP_STATUS(fr->back_idx));
-            TOGGLE_FRAME_CAP_FREE(fr->back_idx);
+            
+            // change the index to page file's instead
+            fr->back_idx = free_slot;
+
             // and mark the page file area as used
             assert(!GET_BMP(frame_table.pf_bmp, free_slot));
             TOGGLE_BMP(frame_table.pf_bmp, free_slot);
-
-            // change the index to page file's instead
-            fr->back_idx = free_slot;
+        } else {
+            fr->back_idx = fr->file_pos;
         }
+        // write OK. now mark the memory frame as free
+        assert(GET_FRAME_CAP_STATUS(phy_frame_idx));
+        TOGGLE_FRAME_CAP_FREE(phy_frame_idx);
 
         // invalidate the frame so that all derived caps are removed, and maps are unmapped
-        cspace_revoke(frame_table.cspace, FRAME_PAGE_CAP(fr->back_idx).cap);
+        cspace_revoke(frame_table.cspace, FRAME_PAGE_CAP(phy_frame_idx).cap);
 
         // and mark the frame object as such
         fr->paged = true;

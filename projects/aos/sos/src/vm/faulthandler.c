@@ -72,13 +72,22 @@ bool sos_vm_fault(seL4_MessageInfo_t* tag)
     // we'll only do remapping here
     seL4_Fault_t fault = seL4_getFault(*tag);
     uintptr_t faultaddr = (uintptr_t)seL4_Fault_VMFault_get_Addr(fault);
-    if(!faultaddr) {
-        ZF_LOGE("SOS faulted on NULL");
-        return false;
-    }
+    uintptr_t currip = (uintptr_t)seL4_Fault_VMFault_get_IP(fault);
+    bool prefetchfault = seL4_Fault_VMFault_get_PrefetchFault(fault);
+    bool write = seL4_GetMR(seL4_VMFault_FSR) & BIT(6);
     
-    seL4_Error err;
-    err = grp01_map_frame(0, 0, true, false, ROUND_DOWN(faultaddr, PAGE_SIZE_4K), seL4_AllRights, seL4_ARM_Default_VMAttributes);
+    bool success = false;
 
-    return err != seL4_NoError;
+    if(faultaddr) {
+        seL4_Error err;
+        err = grp01_map_frame(0, 0, true, false, ROUND_DOWN(faultaddr, PAGE_SIZE_4K), seL4_AllRights, seL4_ARM_Default_VMAttributes);
+        success = err == seL4_NoError;
+    }
+
+    if(!success) {
+        ZF_LOGE("SOS VM fault: %s fault%s @ %p (IP %p).", 
+            (write ? "Write" : "Read"), (prefetchfault ? " (exec)" : ""), faultaddr, currip);
+    }
+
+    return success;
 }
