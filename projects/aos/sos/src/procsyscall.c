@@ -9,11 +9,14 @@
 #include <errno.h>
 #include <utils/arith.h>
 #include <sos/gen_config.h>
+#include <grp01/bitfield.h>
 
 static bool proclist_valid = false;
 static uint32_t proclist_count = 0;
 static sos_process_t proclist[CONFIG_SOS_MAX_PID];
 static seL4_CPtr io_finish_ep;
+
+extern waitee_any_node_t waitee_any[CONFIG_SOS_MAX_PID];
 
 struct user_start_process_bg_param {
     seL4_CPtr reply;
@@ -71,7 +74,7 @@ int proc_list(seL4_Word pid, userptr_t dest, size_t buffcount)
 int user_new_proc(seL4_Word pid, userptr_t p_filename, size_t p_filename_len, seL4_CPtr reply)
 {
     assert(pid < CONFIG_SOS_MAX_PID);
-    
+
     char originalterm;
     char* filename = map_user_string(p_filename, p_filename_len, pid, &originalterm);
     if(!filename)
@@ -116,6 +119,36 @@ seL4_Word user_delete_proc(seL4_Word targetpid)
     destroy_process(targetpid);
 
     return 1;
+}
+
+seL4_Word user_wait_proc(seL4_Word badge, seL4_Word targetpid_, seL4_CPtr reply)
+{
+    sos_pid_t targetpid = (int64_t)targetpid_;
+    if(!targetpid || targetpid >= CONFIG_SOS_MAX_PID)
+        return -ESRCH;
+
+    // set target
+    if(targetpid < 0) {
+        // any
+        waitee_any_node_t* owner = waitee_any + badge; 
+        waitee_any_node_t* tail = waitee_any + waitee_any->prev;
+        waitee_any->prev = tail->next = badge;
+        owner->next = 0;
+        owner->prev = waitee_any->prev;
+    } else {
+        // targetted
+        proctable_t* pt = proctable + targetpid;
+        if(!pt->active)
+            return -ESRCH;
+        assert(!GET_BMP(pt->waitee_list, badge));
+        TOGGLE_BMP(pt->waitee_list, badge);
+    }
+
+    // set this process as a waitee
+    proctable_t* mypt = proctable + badge;
+    mypt->wait_target = targetpid;
+    mypt->waitee_reply = reply;
+    return 0;
 }
 
 void invalidate_proc_list_cache()

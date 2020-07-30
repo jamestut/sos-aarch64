@@ -17,11 +17,12 @@ enum procstate {
 };
 
 // bitfield for process waitee
-typedef uint64_t waitee_bf_t[(CONFIG_SOS_MAX_PID + 63)/64];
+#define WAITEE_BF_WORDS ((CONFIG_SOS_MAX_PID + 63) / 64)
+typedef uint64_t waitee_bf_t[WAITEE_BF_WORDS];
 
-// linked list node for -1 waitee
+// doubly linked list node for -1 waitee
 typedef struct {
-    sos_pid_t pid;
+    sos_pid_t prev;
     sos_pid_t next;
 } waitee_any_node_t;
 
@@ -59,6 +60,8 @@ typedef struct {
 
     // used for waitpid
     seL4_CPtr waitee_reply;
+    sos_pid_t wait_target;
+    waitee_bf_t waitee_list;
 
     struct {
         seL4_Word parent_pid;

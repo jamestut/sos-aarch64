@@ -75,6 +75,7 @@
 // GRP01: M6
 #include "procman.h"
 #include "procsyscall.h"
+#include "maininterface.h"
 
 #include <aos/vsyscall.h>
 
@@ -111,6 +112,18 @@ static seL4_CPtr sched_ctrl_end;
 
 // for debugging
 uintptr_t main_ipc_buff;
+
+// reply objects
+#define REPLY_OBJ_COUNT ((CONFIG_SOS_MAX_PID)*2)
+#define REPLY_POS_INC(x) (((x) + 1) % REPLY_OBJ_COUNT)
+#define REPLY_OBJ_FULL (REPLY_POS_INC(replyobjs.prodpos) == replyobjs.conspos)
+#define REPLY_OBJ_EMPTY (replyobjs.prodpos == replyobjs.conspos)
+
+struct {
+    seL4_CPtr data[REPLY_OBJ_COUNT];
+    uint16_t prodpos;
+    uint16_t conspos;
+} replyobjs = {0};
 
 bool handle_syscall(seL4_Word badge, seL4_Word msglen, seL4_CPtr reply)
 {
@@ -213,6 +226,10 @@ bool handle_syscall(seL4_Word badge, seL4_Word msglen, seL4_CPtr reply)
         handler_ret = user_delete_proc(seL4_GetMR(1));
         break;
 
+    case SOS_SYSCALL_WAITPID:
+        handler_ret = user_wait_proc(badge, seL4_GetMR(1), reply);
+        break;
+
     case SOS_SYSCALL_UNIMPLEMENTED:
         // just print this message as specified :)
         puts("system call not implemented");
@@ -300,19 +317,12 @@ void handle_fault(seL4_Word badge, seL4_MessageInfo_t message, seL4_CPtr reply)
     }
 }
 
-// macros specific for syscall_loop
-#define REPLY_OBJ_COUNT ((CONFIG_SOS_MAX_PID)*2)
-#define REPLY_POS_INC(x) (((x) + 1) % REPLY_OBJ_COUNT)
-#define REPLY_OBJ_FULL (REPLY_POS_INC(prodpos) == conspos)
-#define REPLY_OBJ_EMPTY (prodpos == conspos)
 NORETURN void syscall_loop(seL4_CPtr ep)
 {
-    static seL4_CPtr replyobjs[REPLY_OBJ_COUNT];
-    memset(replyobjs, 0, sizeof(replyobjs));
-
     // cons == prod     : empty
     // prod == cons - 1 : full
-    uint16_t prodpos = REPLY_OBJ_COUNT - 1, conspos = 0;
+    replyobjs.prodpos = REPLY_OBJ_COUNT - 1;
+    replyobjs.conspos = 0; 
 
     while (1) {
         // it is impossible that the reply object is full, as there is at most
@@ -321,7 +331,7 @@ NORETURN void syscall_loop(seL4_CPtr ep)
         ZF_LOGF_IF(REPLY_OBJ_EMPTY, "Reply object array is empty @ syscall_loop!");
 
         /* Create reply object if needed */
-        seL4_CPtr* reply = replyobjs + conspos;
+        seL4_CPtr* reply = replyobjs.data + replyobjs.conspos;
         if(!*reply) 
             ZF_LOGF_IF(!alloc_retype(reply, seL4_ReplyObject, seL4_ReplyBits),
                 "Cannot allocate reply object");
@@ -351,9 +361,7 @@ NORETURN void syscall_loop(seL4_CPtr ep)
                     break;
                 case BADGE_REPLY_RET:
                     // we trust whoever send us this!
-                    ZF_LOGF_IF(REPLY_OBJ_FULL, "Reply object array is full on REPLY_RET");
-                    replyobjs[prodpos] = seL4_GetMR(0);
-                    prodpos = REPLY_POS_INC(prodpos);
+                    sos_reuse_reply(seL4_GetMR(0));
                     // reply!
                     message = seL4_MessageInfo_new(0, 0, 0, 0);
                     seL4_Send(*reply, message);
@@ -361,17 +369,20 @@ NORETURN void syscall_loop(seL4_CPtr ep)
                 default:
                     // handle_syscall returns false if it needs the reply object later
                     if(!handle_syscall(badge, msglen, *reply)) 
-                        conspos = REPLY_POS_INC(conspos);
+                        replyobjs.conspos = REPLY_POS_INC(replyobjs.conspos);
             }
         } else {
             handle_fault(badge, message, *reply);
         }
     }
 }
-#undef REPLY_OBJ_COUNT
-#undef REPLY_POS_INC
-#undef REPLY_OBJ_FULL
-#undef REPLY_OBJ_EMPTY
+
+void sos_reuse_reply(seL4_CPtr reply)
+{
+    ZF_LOGF_IF(REPLY_OBJ_FULL, "Reply object array is full on REPLY_RET");
+    replyobjs.data[replyobjs.prodpos] = reply;
+    replyobjs.prodpos = REPLY_POS_INC(replyobjs.prodpos);
+}
 
 /* Allocate an endpoint and a notification object for sos.
  * Note that these objects will never be freed, so we do not

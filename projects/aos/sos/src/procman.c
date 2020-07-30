@@ -3,6 +3,7 @@
 #include "proctable.h"
 #include "utils.h"
 #include "grp01.h"
+#include "maininterface.h"
 #include "vmem_layout.h"
 #include "vm/addrspace.h"
 #include "vm/mapping2.h"
@@ -16,6 +17,7 @@
 #include <sys/types.h>
 #include <fcntl.h>
 #include <sel4runtime/auxv.h>
+#include <grp01/bitfield.h>
 
 #define USER_PRIORITY               (0)
 
@@ -23,11 +25,18 @@ static seL4_CPtr ep;
 static seL4_CPtr sched_ctrl_start;
 static seL4_CPtr sched_ctrl_end;
 
-// processes that waited upon -1
+// processes that wait upon -1
+// worst case is when all processes are waiting for -1.
+// entry 0 is both head and sentinel.
+// - next = first waitee (0 if none)
+// - prev = last waitee (0 if none)
+waitee_any_node_t waitee_any[CONFIG_SOS_MAX_PID] = {0};
 
 extern dynarray_t scratchas;
 
 bool setup_scratch_space(sos_pid_t pid, size_t filesize);
+
+void notify_waitee(sos_pid_t waitee, sos_pid_t target);
 
 void init_process_starter(seL4_CPtr ep_, seL4_CPtr sched_ctrl_start_, seL4_CPtr sched_ctrl_end_)
 {
@@ -457,6 +466,22 @@ void destroy_process(sos_pid_t pid)
         free_frame(pt->ipc_buffer_frame);
         pt->ipc_buffer_frame = 0;
     }
+
+    // reuse reply buffer if process is waiting on something
+    if(pt->waitee_reply) {
+        // remove this process from target's waitee list
+        if(pt->wait_target < 0) {
+            waitee_any[waitee_any[pid].prev].next = waitee_any[pid].next;
+            waitee_any[waitee_any[pid].next].prev = waitee_any[pid].prev;
+            memset(waitee_any + pid, 0, sizeof(waitee_any_node_t));
+        } else {
+            assert(GET_BMP(proctable[pt->wait_target].waitee_list, pid));
+            TOGGLE_BMP(proctable[pt->wait_target].waitee_list, pid);
+        }
+        // reuse reply
+        sos_reuse_reply(pt->waitee_reply);
+        pt->wait_target = pt->waitee_reply = 0;
+    }
     
     // finally:
     // we only set the fields here to zero. callers are expected
@@ -469,4 +494,30 @@ void destroy_process(sos_pid_t pid)
     dynarray_destroy(&pt->as);
     bgworker_destroy(pid);
     set_pid_state(pid, false);
+
+    // notify a single waitee from any waitee
+    if(waitee_any->prev) {
+        notify_waitee(waitee_any->next, pid);
+        waitee_any_node_t* curr = waitee_any + waitee_any->next;
+        waitee_any->next = curr->next;
+        waitee_any[curr->next].prev = curr->prev;
+        memset(curr, 0, sizeof(waitee_any_node_t));
+    }
+    
+    // notify all targeted waitee
+    sos_pid_t tg_waitee;
+    while((tg_waitee = bitfield_first_used(WAITEE_BF_WORDS, pt->waitee_list)) > 0) {
+        notify_waitee(tg_waitee, pid);
+        TOGGLE_BMP(pt->waitee_list, tg_waitee);
+    }
+}
+
+void notify_waitee(sos_pid_t waitee, sos_pid_t target)
+{
+    proctable_t* pt = proctable + waitee;
+    seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, 1);
+    seL4_SetMR(0, target);
+    seL4_Send(pt->waitee_reply, msginfo);
+    sos_reuse_reply(pt->waitee_reply);
+    pt->waitee_reply = pt->wait_target = 0;
 }

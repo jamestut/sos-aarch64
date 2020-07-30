@@ -13,3 +13,5 @@ int proc_list(seL4_Word pid, userptr_t dest, size_t buffcount);
 int user_new_proc(seL4_Word pid, userptr_t p_filename, size_t p_filename_len, seL4_CPtr reply);
 
 seL4_Word user_delete_proc(seL4_Word targetpid);
+
+seL4_Word user_wait_proc(seL4_Word badge, seL4_Word targetpid_, seL4_CPtr reply);

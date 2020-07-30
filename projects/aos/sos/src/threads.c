@@ -106,7 +106,6 @@ static void thread_trampoline(sos_thread_t *thread, thread_main_f *function, voi
 /*
  * Spawn a new kernel (SOS) thread to execute function with arg
  */
-// TODO: GRP01: make stack pages paged
 sos_thread_t *thread_create(thread_main_f function, void *arg, const char* name, seL4_Word badge, bool resume, seL4_CPtr ep, seL4_Word prio)
 {
     assert_main_thread();
