@@ -42,7 +42,9 @@ add_definitions(-U__linux__)
 add_definitions(-D_SYS_POLL_H)
 
 # list of apps to include in the cpio archive
-get_property(apps GLOBAL PROPERTY apps_property)
+if(NOT SosDisableCPIO)
+    get_property(apps GLOBAL PROPERTY apps_property)
+endif()
 MakeCPIO(archive.o "${apps}")
 
 # add any new c files here
