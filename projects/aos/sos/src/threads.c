@@ -33,8 +33,11 @@
 
 #define SOS_THRD_IPC_BUFF_VADDR(thrd_ref) (SOS_IPC_BUFFER + PAGE_SIZE_4K * SOS_THRD_IDX(thrd_ref))
 
+// add one guard page
 #define SOS_THRD_STACK_BOTTOM(thrd_ref) ((SOS_STACK + SOS_STACK_PAGES * PAGE_SIZE_4K) + \
-    SOS_THRD_IDX(thrd_ref) * PAGE_SIZE_4K * CONFIG_SOS_INT_THREADS_STACK_PAGES)
+    SOS_THRD_IDX(thrd_ref) * PAGE_SIZE_4K * (CONFIG_SOS_INT_THREADS_STACK_PAGES + 1))
+
+#define SOS_THRD_STACK_TOP(thrd_ref) (SOS_THRD_STACK_BOTTOM((thrd_ref) + 1))
 
 static sos_thread_t threads[SOS_MAX_THREAD] = {0};
 #define SOS_THREADS_BF_WORDS ((SOS_MAX_THREAD + 63) / 64)
@@ -60,7 +63,7 @@ void init_threads(seL4_CPtr ep, seL4_CPtr sched_ctrl_start_, seL4_CPtr sched_ctr
 
 static bool alloc_stack(sos_thread_t* thread)
 {
-    uintptr_t sp = SOS_THRD_STACK_BOTTOM(thread);
+    uintptr_t sp = SOS_THRD_STACK_TOP(thread);
     for (int i = 0; i < CONFIG_SOS_INT_THREADS_STACK_PAGES; i++) {
         // already have a frame allocated here.
         if(thread->stack_frame_uts[i])
@@ -71,8 +74,9 @@ static bool alloc_stack(sos_thread_t* thread)
             ZF_LOGE("Failed to allocate stack page");
             return false;
         }
+        
         seL4_Error err = map_frame(&cspace, thread->stack_frame_caps[i], seL4_CapInitThreadVSpace,
-                                   sp + i * PAGE_SIZE_4K, seL4_AllRights, seL4_ARM_Default_VMAttributes);
+                                   sp - (i + 1) * PAGE_SIZE_4K, seL4_AllRights, seL4_ARM_Default_VMAttributes);
         if (err != seL4_NoError) {
             ZF_LOGE("Failed to map stack");
             cap_ut_dealloc(thread->stack_frame_caps + i, thread->stack_frame_uts + i);
@@ -241,8 +245,7 @@ sos_thread_t *thread_create(thread_main_f function, void *arg, const char* name,
     }
 
     // top of the stack
-    seL4_Word sp = SOS_THRD_STACK_BOTTOM(new_thread) + 
-        (PAGE_SIZE_4K * CONFIG_SOS_INT_THREADS_STACK_PAGES);
+    seL4_Word sp = SOS_THRD_STACK_TOP(new_thread);
 
     /* set initial context */
     seL4_UserContext context = {
