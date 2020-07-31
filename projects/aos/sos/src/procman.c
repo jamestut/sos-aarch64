@@ -1,5 +1,6 @@
 #include "procman.h"
 #include "threadassert.h"
+#include "procsyscall.h"
 #include "proctable.h"
 #include "utils.h"
 #include "grp01.h"
@@ -47,6 +48,8 @@ void init_process_starter(seL4_CPtr ep_, seL4_CPtr sched_ctrl_start_, seL4_CPtr 
 
 sos_pid_t create_process(sos_pid_t parent_pid, char *app_name)
 {
+    invalidate_proc_list_cache();
+
     assert_main_thread();
     // find process table to use
     sos_pid_t ptidx = find_free_pid();
@@ -407,6 +410,8 @@ error_01: // go here if error after opening file
 
 void destroy_process(sos_pid_t pid)
 {
+    invalidate_proc_list_cache();
+    
     assert_main_thread();
     proctable_t* pt = proctable + pid;
     assert(pt->active);
