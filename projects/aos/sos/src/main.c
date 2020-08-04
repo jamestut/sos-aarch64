@@ -354,6 +354,8 @@ NORETURN void syscall_loop(seL4_CPtr ep)
             {
                 case BADGE_IO_FINISH:
                     ZF_LOGI("carrying on pending process destroy for PID %d", seL4_GetMR(0));
+                    if(proctable[seL4_GetMR(0)].state_flag & PROC_STATE_PENDING_KILL)
+                        proctable[seL4_GetMR(0)].state_flag ^= PROC_STATE_PENDING_KILL;
                     destroy_process(seL4_GetMR(0));
                     break;
                 case BADGE_DELEGATE:

@@ -182,8 +182,11 @@ void user_start_process_bg(void* pparam)
     pt->loader_state.filename[param->filename_termpos - 1] = param->filename_term;
     delegate_userptr_unmap(pt->loader_state.filename);
     
-    if(!success)
+    if(!success) {
+        assert(pt->state_flag & PROC_STATE_CONSTRUCTING);
+        pt->state_flag ^= PROC_STATE_CONSTRUCTING;
         delegate_destroy_process(param->pid);
+    }
 
     seL4_CPtr reply = param->reply;
     uint32_t newpid = param->pid;
@@ -196,8 +199,11 @@ void user_start_process_bg(void* pparam)
     delegate_reuse_reply(reply);
 
     if(pt->state_flag & PROC_STATE_PENDING_KILL) {
+        // remove the flag. if there is a pending IO, destroy_process will set it again,
+        // and fileman will do its job once IO finishes.
+        pt->state_flag ^= PROC_STATE_PENDING_KILL;
         seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 1);
-        seL4_SetMR(0, param->pid);
+        seL4_SetMR(0, newpid);
         seL4_Call(io_finish_ep, msg);
     }
 }

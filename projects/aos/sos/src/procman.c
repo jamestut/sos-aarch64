@@ -404,7 +404,6 @@ error_02: // go here if error after allocating scratch
     delegate_free_sos_scratch(scratch_base);
 error_01: // go here if error after opening file
     fh.fh->close(parent_pid, fh.id);
-    pt->state_flag ^= PROC_STATE_CONSTRUCTING;
     return false;
 }
 
