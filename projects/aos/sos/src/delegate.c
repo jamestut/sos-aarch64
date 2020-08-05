@@ -476,7 +476,7 @@ finish:
 
 void hdl_sos_free_scratch(seL4_CPtr reply)
 {
-    int asidx = addrspace_find(&scratchas, reply);
+    int asidx = addrspace_find(&scratchas, seL4_GetMR(1));
     if(asidx >= 0) {
         addrspace_t* as = (addrspace_t*)scratchas.data + asidx;
         grp01_unmap_frame(0, as->begin, as->end, false);

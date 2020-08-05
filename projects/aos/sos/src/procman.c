@@ -388,15 +388,17 @@ bool start_process_load_elf(sos_pid_t new_pid)
     if(elf_load(new_pid, &elf_file))
         goto error_02;
 
-    // load finishes. unmap scratch space
-    fh.fh->close(parent_pid, fh.id);
-    delegate_free_sos_scratch(scratch_base);
-
-    // now start the process
+    // initial registers for stack and entrypoint
     seL4_UserContext context = {
         .pc = elf_getEntryPoint(&elf_file),
         .sp = sp,
     };
+
+    // load finishes. unmap scratch space
+    fh.fh->close(parent_pid, fh.id);
+    delegate_free_sos_scratch(scratch_base);
+
+    // go!
     seL4_Error err = seL4_TCB_WriteRegisters(pt->tcb, 1, 0, 2, &context);
     ZF_LOGE_IF(err, "Failed to write registers");
 

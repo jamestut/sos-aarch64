@@ -181,6 +181,7 @@ void user_start_process_bg(void* pparam)
 
     pt->loader_state.filename[param->filename_termpos - 1] = param->filename_term;
     delegate_userptr_unmap(pt->loader_state.filename);
+    pt->loader_state.filename = NULL;
     
     if(!success) {
         assert(pt->state_flag & PROC_STATE_CONSTRUCTING);

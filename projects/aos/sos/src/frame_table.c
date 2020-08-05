@@ -223,9 +223,12 @@ void free_frame(frame_ref_t frame_ref)
                 // free the page space
                 frame->paged = false;
                 // mark the backing page file as free
-                assert(GET_BMP(frame_table.pf_bmp, frame->back_idx));
-                TOGGLE_BMP(frame_table.pf_bmp, frame->back_idx);
+                if(!frame->file_backed) {
+                    assert(GET_BMP(frame_table.pf_bmp, frame->back_idx));
+                    TOGGLE_BMP(frame_table.pf_bmp, frame->back_idx);
+                }
             } else {
+                // has a memory frame
                 page_cap_t pagecap = FRAME_PAGE_CAP(frame->back_idx);
                 // revoke all derived frame page to ensure that no one is mapping it
                 cspace_revoke(frame_table.cspace, pagecap.cap);
