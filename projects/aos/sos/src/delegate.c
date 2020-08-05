@@ -29,6 +29,7 @@ typedef enum {
     INT_THRDREQ_SOS_ALLOC_SCRATCH,
     INT_THRDREQ_SOS_FREE_SCRATCH,
     INT_THRDREQ_PROCMAN_DESTROY_PROC,
+    INT_THRDREQ_FAKEIRQ_TIMER_TICK,
     
     // sentinel value
     INT_THRDREQ_COUNT
@@ -73,13 +74,15 @@ void hdl_sos_free_scratch(seL4_CPtr reply);
 
 void hdl_procman_destroy_proc(seL4_CPtr reply);
 
+void hdl_fakeirq_timer_tick(seL4_CPtr reply);
+
 // WARNING: order of declaration must follow that of IntThreadReq
 struct {
     void (*handler)(seL4_CPtr);
     unsigned short code;
     unsigned short expected_param;
 } handlers[] = {
-    {hdl_do_nothing, INT_THRDREQ_NONE, 0},
+    {hdl_do_nothing, INT_THRDREQ_NONE, 1},
     {hdl_userptr_read, INT_THRDREQ_USERPTR_READ, 4},
     {hdl_userptr_write_start, INT_THRDREQ_USERPTR_WRITE_START, 4},
     {hdl_userptr_write_next, INT_THRDREQ_USERPTR_WRITE_NEXT, 2},
@@ -96,6 +99,7 @@ struct {
     {hdl_sos_alloc_scratch, INT_THRDREQ_SOS_ALLOC_SCRATCH, 2},
     {hdl_sos_free_scratch, INT_THRDREQ_SOS_FREE_SCRATCH, 2},
     {hdl_procman_destroy_proc, INT_THRDREQ_PROCMAN_DESTROY_PROC, 2},
+    {hdl_fakeirq_timer_tick, INT_THRDREQ_FAKEIRQ_TIMER_TICK, 1},
 };
 
 /* ---- definitions start here ---- */
@@ -268,6 +272,13 @@ void delegate_destroy_process(sos_pid_t pid)
     seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 2);
     seL4_SetMR(0, INT_THRDREQ_PROCMAN_DESTROY_PROC);
     seL4_SetMR(1, pid);
+    seL4_Call(delegate_ep, msg);
+}
+
+void delegate_fake_timer_tick()
+{
+    seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 1);
+    seL4_SetMR(0, INT_THRDREQ_FAKEIRQ_TIMER_TICK);
     seL4_Call(delegate_ep, msg);
 }
 
@@ -477,5 +488,11 @@ void hdl_sos_free_scratch(seL4_CPtr reply)
 void hdl_procman_destroy_proc(seL4_CPtr reply)
 {
     destroy_process(seL4_GetMR(1));
+    hdl_do_nothing(reply);
+}
+
+void hdl_fakeirq_timer_tick(seL4_CPtr reply)
+{
+    timer_irq(NULL, 0, 0);
     hdl_do_nothing(reply);
 }

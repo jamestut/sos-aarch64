@@ -420,7 +420,7 @@ void configure_timeout_hwchk(volatile meson_timer_reg_t *regs, timeout_id_t time
 void timer_tick()
 {
     #ifndef CONFIG_PLAT_ODROIDC2
-    const uint64_t acc = 10000; // in us
+    const uint64_t acc = 100000; // in us
     fakestate.currtime += acc;
     if(fakestate.enabled) {
         fakestate.timeout -= acc;
@@ -429,7 +429,7 @@ void timer_tick()
                 fakestate.timeout = fakestate.timeout_set;
             else
                 fakestate.enabled = false;
-            timer_irq(NULL, 0, 0);
+            delegate_fake_timer_tick();
         }
     }
     #endif

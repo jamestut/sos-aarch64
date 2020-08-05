@@ -24,7 +24,7 @@ void start_fake_timer()
 void timer_ticker(void* unused)
 {
     while(1) {
-        for(int i=0; i<10; ++i)
+        for(int i=0; i<100; ++i)
             seL4_Yield();
         timer_tick();
     }

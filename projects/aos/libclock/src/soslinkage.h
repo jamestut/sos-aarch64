@@ -12,3 +12,5 @@ typedef int (*sos_irq_callback_t)(
 
 int sos_register_irq_handler(seL4_Word irq, bool edge_triggered, 
     sos_irq_callback_t callback, void *data, seL4_IRQHandler *irq_handler);
+
+void delegate_fake_timer_tick();

@@ -55,7 +55,6 @@
 #include "fs/cpiofs.h"
 
 // GRP01: M1
-#include "libclocktest.h"
 #include "fakes/timer.h"
 // GRP01: M2
 #include "fs/console.h"
