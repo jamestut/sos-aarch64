@@ -286,6 +286,10 @@ static uintptr_t init_process_stack(sos_pid_t badge, elf_t *elf_file)
     // FT: no pin needed. there is no other frame_data/frame_page until this 
     // function finishes.
     void *local_stack_top = delegate_frame_data(initial_stack) + PAGE_SIZE_4K;
+    if(!local_stack_top) {
+        ZF_LOGE("Memory full when setting up process stack");
+        return 0;
+    }
 
     /* null terminate the aux vectors */
     index = stack_write(local_stack_top, index, 0);

@@ -101,6 +101,8 @@ add_executable(
     # GRP01: M6
     src/procman.c
     src/procsyscall.c
+    # GRP01: the rest
+    src/mallocts.c
 )
 target_include_directories(sos PRIVATE "include" "../libsosapi/include")
 target_link_libraries(

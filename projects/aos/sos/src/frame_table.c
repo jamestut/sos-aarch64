@@ -266,15 +266,7 @@ static size_t frame_mem_page_idx(frame_ref_t frame_ref)
         pageidx = frame->back_idx;
     } else {
         pageidx = get_new_phy_frame();
-        // TODO: check alloc error on each codepath
-        if(frame->reqempty) {
-            if(!pageidx)
-                goto on_alloc_phy_frame_fail;
-            // the frame object must be fresh!
-            assert(!frame->backed);
-            memset((void*)(SOS_FRAME_DATA + pageidx * PAGE_SIZE_4K), 0, PAGE_SIZE_4K);
-            frame->reqempty = false;
-        } else if (frame->backed && frame->paged) {
+        if (frame->backed && frame->paged) {
             if(frame->file_backed) {
                 if(!pageidx)
                     goto on_alloc_phy_frame_fail;
@@ -302,11 +294,21 @@ static size_t frame_mem_page_idx(frame_ref_t frame_ref)
                 pageidx = get_new_phy_frame();
                     if(!pageidx) {
                         frame->paged = frame->backed = false;
+                        frame->reqempty = true;
                         ZF_LOGE("Failed to allocate frame when page in. Frame data discarded.");
                         goto on_alloc_phy_frame_fail;
                     }
                     memcpy(frame_table.frame_data[pageidx], tmp_copy, PAGE_SIZE_4K);
                 }
+            }
+        } else {
+            if(!pageidx)
+                goto on_alloc_phy_frame_fail;
+            // the frame object must be fresh!
+            assert(!frame->backed);
+            if(frame->reqempty) {
+                memset((void*)(SOS_FRAME_DATA + pageidx * PAGE_SIZE_4K), 0, PAGE_SIZE_4K);
+                frame->reqempty = false;
             }
         }
         frame->back_idx = pageidx;

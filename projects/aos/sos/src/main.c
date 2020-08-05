@@ -106,6 +106,9 @@ cspace_t cspace;
 /* scratch address space */
 dynarray_t scratchas;
 
+/* Endpoint for musl memory allocator */
+seL4_CPtr malloc_ep = 0;
+
 static seL4_CPtr sched_ctrl_start;
 static seL4_CPtr sched_ctrl_end;
 
@@ -351,6 +354,9 @@ NORETURN void syscall_loop(seL4_CPtr ep)
         } else if (label == seL4_Fault_NullFault) {
             switch(badge)
             {
+                case BADGE_MALLOC:
+                    malloc_delegate(*reply);
+                    break;
                 case BADGE_IO_FINISH:
                     ZF_LOGI("carrying on pending process destroy for PID %d", seL4_GetMR(0));
                     if(proctable[seL4_GetMR(0)].state_flag & PROC_STATE_PENDING_KILL)
@@ -477,6 +483,11 @@ NORETURN void *main_continued(UNUSED void *arg)
         IRQ_IDENT_BADGE_BITS
     );
     frame_table_init(&cspace, seL4_CapInitThreadVSpace);
+
+    // IPC for malloc
+    ZF_LOGF_IF(!(malloc_ep = cspace_alloc_slot(&cspace)), "Unable to allocate slot for malloc endpoint");
+    ZF_LOGF_IF(cspace_mint(&cspace, malloc_ep, &cspace, ipc_ep, seL4_AllRights, BADGE_MALLOC) != seL4_NoError,
+        "Unable to mint malloc endpoint");
 
     // fill in SOS' own process data!
     set_pid_state(0, true);
