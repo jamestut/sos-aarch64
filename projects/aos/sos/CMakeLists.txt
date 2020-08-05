@@ -73,7 +73,6 @@ add_executable(
     src/utils.c
     src/threads.c
     # GRP01: M1
-    src/libclocktest.c
     src/fakes/timer.c
     # GRP01: M2
     src/bgworker.c
