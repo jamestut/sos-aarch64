@@ -520,7 +520,7 @@ NORETURN void *main_continued(UNUSED void *arg)
     cpio_fs_init();
 
     #if CONFIG_SOS_FAKE_PF > 0ul
-    fake_fs_init(0xA00000);
+    fake_fs_init(CONFIG_SOS_FAKE_PF_SIZE);
     #endif
 
     #if CONFIG_SOS_LOCAL_FS > 0ul
