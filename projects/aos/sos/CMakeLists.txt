@@ -23,6 +23,8 @@ config_string(SosUseFakePageFile SOS_FAKE_PF "Use fake page file" UNQUOTE DEFAUL
 
 config_string(SosFakePageFileSize SOS_FAKE_PF_SIZE "Capacity of fake page file in bytes" UNQUOTE DEFAULT "10485760ul")
 
+config_string(SosMaxPageFileSize SOS_PF_SIZE "Capacity of real page file in bytes" UNQUOTE DEFAULT "0ul")
+
 config_string(SosUseLocalFS SOS_LOCAL_FS "Use local FS on CPIO instead of NFS" UNQUOTE DEFAULT "0ul")
 
 config_string(SosMaxPID SOS_MAX_PID "Maximum number of processes that can run at the same time" UNQUOTE DEFAULT "128ul")

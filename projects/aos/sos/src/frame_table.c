@@ -257,54 +257,72 @@ static size_t frame_mem_page_idx(frame_ref_t frame_ref)
 {
     assert_main_thread();
 
+    // for page in, in case we're really running out of memory
+    static uint8_t tmp_copy[PAGE_SIZE_4K];
+
     frame_t *frame = frame_from_ref(frame_ref);
     size_t pageidx;
     if(frame->backed && !frame->paged) {
         pageidx = frame->back_idx;
     } else {
         pageidx = get_new_phy_frame();
-        if(!pageidx) {
-            ZF_LOGE("Failed to obtain a frame. Memory full!");
-            return 0;
-        } else {
-            if(frame->reqempty) {
-                // the frame object must be fresh!
-                assert(!frame->backed);
-                memset((void*)(SOS_FRAME_DATA + pageidx * PAGE_SIZE_4K), 0, PAGE_SIZE_4K);
-                frame->reqempty = false;
-            } else if (frame->backed && frame->paged) {
-                if(frame->file_backed) {
-                    // restore from the backed file
-                    sos_filehandle_t* fh = (void*)frame->file_backer;
-                    ssize_t rd = fh->fh->read(0, fh->id,frame_table.frame_data[pageidx], frame->file_pos * PAGE_SIZE_4K, PAGE_SIZE_4K);
-                    ZF_LOGE_IF(rd <= 0, "Read file backed by file returned: %lld", rd);
-                } else {
-                    // restore from PF
-                    ssize_t rdres = page_file.fh->read(0, page_file.id, frame_table.frame_data[pageidx],
-                        frame->back_idx * PAGE_SIZE_4K, PAGE_SIZE_4K);
-                    // should the read is failed for any reason, we'll bail out!
-                    // we also consider unfulfilled reads as a failure as well ...
-                    if(rdres != PAGE_SIZE_4K) {
-                        ZF_LOGE("Error reading from page file: got %lld instead of %lld",
-                            rdres, PAGE_SIZE_4K);
-                        return 0;
+        // TODO: check alloc error on each codepath
+        if(frame->reqempty) {
+            if(!pageidx)
+                goto on_alloc_phy_frame_fail;
+            // the frame object must be fresh!
+            assert(!frame->backed);
+            memset((void*)(SOS_FRAME_DATA + pageidx * PAGE_SIZE_4K), 0, PAGE_SIZE_4K);
+            frame->reqempty = false;
+        } else if (frame->backed && frame->paged) {
+            if(frame->file_backed) {
+                if(!pageidx)
+                    goto on_alloc_phy_frame_fail;
+                // restore from the backed file
+                sos_filehandle_t* fh = (void*)frame->file_backer;
+                ssize_t rd = fh->fh->read(0, fh->id,frame_table.frame_data[pageidx], frame->file_pos * PAGE_SIZE_4K, PAGE_SIZE_4K);
+                ZF_LOGE_IF(rd <= 0, "Read file backed by file returned: %lld", rd);
+            } else {
+                // restore from PF
+                ssize_t rdres = page_file.fh->read(0, page_file.id,
+                    pageidx ? frame_table.frame_data[pageidx] : tmp_copy,
+                    frame->back_idx * PAGE_SIZE_4K, PAGE_SIZE_4K);
+                // should the read is failed for any reason, we'll bail out!
+                // we also consider unfulfilled reads as a failure as well ...
+                if(rdres != PAGE_SIZE_4K) {
+                    ZF_LOGE("Error reading from page file: got %lld instead of %lld",
+                        rdres, PAGE_SIZE_4K);
+                    return 0;
+                }
+                // mark the backing page file as free
+                assert(GET_BMP(frame_table.pf_bmp, frame->back_idx));
+                TOGGLE_BMP(frame_table.pf_bmp, frame->back_idx);
+                // try allocating frame again
+                if(!pageidx) {
+                pageidx = get_new_phy_frame();
+                    if(!pageidx) {
+                        frame->paged = frame->backed = false;
+                        ZF_LOGE("Failed to allocate frame when page in. Frame data discarded.");
+                        goto on_alloc_phy_frame_fail;
                     }
-                    // mark the backing page file as free
-                    assert(GET_BMP(frame_table.pf_bmp, frame->back_idx));
-                    TOGGLE_BMP(frame_table.pf_bmp, frame->back_idx);
+                    memcpy(frame_table.frame_data[pageidx], tmp_copy, PAGE_SIZE_4K);
                 }
             }
-            frame->back_idx = pageidx;
-            frame->backed = true;
-            frame->paged = false;
-            if(frame->usage < MAX_FRAME_USAGE)
-                ++frame->usage;
-            // mark the physical frame capability as used
-            assert(!GET_FRAME_CAP_STATUS(pageidx));
-            TOGGLE_FRAME_CAP_FREE(pageidx);
         }
+        frame->back_idx = pageidx;
+        frame->backed = true;
+        frame->paged = false;
+        if(frame->usage < MAX_FRAME_USAGE)
+            ++frame->usage;
+        // mark the physical frame capability as used
+        assert(!GET_FRAME_CAP_STATUS(pageidx));
+        TOGGLE_FRAME_CAP_FREE(pageidx);
     }
     return pageidx;
+
+on_alloc_phy_frame_fail:
+    ZF_LOGE("Failed to obtain a frame. Memory full!");
+    return 0;
 }
 
 static size_t evict_frame()

@@ -59,7 +59,6 @@ bool vm_fault(seL4_MessageInfo_t* tag, seL4_Word badge)
         err = grp01_map_frame(badge, frame, true, false, ROUND_DOWN(faultaddr, PAGE_SIZE_4K), as->perm, seL4_ARM_Default_VMAttributes);
         if(err != seL4_NoError) {
             ZF_LOGE("Error mapping frame to target vaddr: %d", err);
-            free_frame(frame);
             return false;
         }
     }
