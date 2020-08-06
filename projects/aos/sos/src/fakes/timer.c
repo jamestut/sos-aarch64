@@ -13,7 +13,7 @@ void timer_ticker(void* unused);
 void start_fake_timer()
 {
     if(!started) {
-        fake_timer_thread = spawn(timer_ticker, NULL, "fake_timer", 0, 0, 0);
+        fake_timer_thread = spawn(timer_ticker, NULL, "fake_timer", 0);
         if(!fake_timer_thread)
             return;
         started = true;

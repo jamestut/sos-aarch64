@@ -11,6 +11,8 @@
 #include <utils/zf_log_if.h>
 #include <utils/arith.h>
 
+extern sos_thread_t threads[SOS_MAX_THREAD];
+
 bool vm_fault(seL4_MessageInfo_t* tag, seL4_Word badge)
 {
     // we assume that all arguments passed here is sane!
@@ -65,7 +67,7 @@ bool vm_fault(seL4_MessageInfo_t* tag, seL4_Word badge)
     return true;
 }
 
-bool sos_vm_fault(seL4_MessageInfo_t* tag)
+bool sos_vm_fault(seL4_Word badge, seL4_MessageInfo_t* tag)
 {
     // special case if it is one of SOS' thread that is faulting
     // we'll only do remapping here
@@ -84,8 +86,28 @@ bool sos_vm_fault(seL4_MessageInfo_t* tag)
     }
 
     if(!success) {
-        ZF_LOGE("SOS VM fault: %s fault%s @ %p (IP %p).", 
-            (write ? "Write" : "Read"), (prefetchfault ? " (exec)" : ""), faultaddr, currip);
+        int thrdidx = badge & (BADGE_INT_THRD - 1);
+        sos_thread_t* currthrd = threads + thrdidx;
+        if(currthrd->jump_on_fault.enabled) {
+            ZF_LOGW("SOS VM fault cannot be handled, but thread %d provides jump target.", thrdidx);
+            currthrd->jump_on_fault.enabled = false;
+
+            seL4_UserContext regtgt = {
+                .pc = (seL4_Word)thread_wrap,
+                // 128 bytes for "emergency stack", give or take :)
+                .sp = currthrd->stack_base + 128 
+            };
+
+            // the resumption will be done upon reply
+            if(seL4_TCB_WriteRegisters(currthrd->tcb, false, 0, 2, &regtgt) != seL4_NoError) {
+                ZF_LOGF("Failure to write TCB registers for continuation");
+                return false;
+            }
+            success = true;
+        } else {
+            ZF_LOGE("SOS VM fault: %s fault%s @ %p (IP %p).", 
+                (write ? "Write" : "Read"), (prefetchfault ? " (exec)" : ""), faultaddr, currip);
+        }
     }
 
     return success;

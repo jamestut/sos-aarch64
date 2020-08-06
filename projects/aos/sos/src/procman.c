@@ -372,31 +372,42 @@ bool start_process_load_elf(sos_pid_t new_pid)
         goto error_02;
     }
 
-    // parse the executable file
-    elf_t elf_file = {};
-    /* Ensure that the file is an elf file. */
-    if (elf_newFile(scratch_base, filestat.st_size, &elf_file)) {
-        ZF_LOGE("Invalid elf file");
+    // context to resume the target thread
+    seL4_UserContext context = {};
+
+    current_thread->jump_on_fault.enabled = true;
+    if(!setjmp(current_thread->jump_on_fault.ret)) {
+        // parse the executable file
+        elf_t elf_file = {};
+        /* Ensure that the file is an elf file. */
+        if (elf_newFile(scratch_base, filestat.st_size, &elf_file)) {
+            ZF_LOGE("Invalid elf file");
+            goto error_02;
+        }
+
+        uintptr_t sp = init_process_stack(new_pid, &elf_file);
+        if(!sp)
+            // process_destroy will take care of the mapped frames here
+            goto error_02;
+
+        if(elf_load(new_pid, &elf_file))
+            goto error_02;
+
+        // initial registers for stack and entrypoint
+        context.pc = elf_getEntryPoint(&elf_file);
+        context.sp = sp;
+    } else {
+        // error occured
+        ZF_LOGE("Error when reading ELF file.");
         goto error_02;
     }
-
-    uintptr_t sp = init_process_stack(new_pid, &elf_file);
-    if(!sp)
-        // process_destroy will take care of the mapped frames here
-        goto error_02;
-
-    if(elf_load(new_pid, &elf_file))
-        goto error_02;
-
-    // initial registers for stack and entrypoint
-    seL4_UserContext context = {
-        .pc = elf_getEntryPoint(&elf_file),
-        .sp = sp,
-    };
 
     // load finishes. unmap scratch space
     fh.fh->close(parent_pid, fh.id);
     delegate_free_sos_scratch(scratch_base);
+
+    // disable our resumption feature!
+    current_thread->jump_on_fault.enabled = false;
 
     // go!
     seL4_Error err = seL4_TCB_WriteRegisters(pt->tcb, 1, 0, 2, &context);

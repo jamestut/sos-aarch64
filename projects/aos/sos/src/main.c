@@ -286,14 +286,14 @@ void handle_fault(seL4_Word badge, seL4_MessageInfo_t message, seL4_CPtr reply)
                     break;
             }
         }
-    } else if (badge == 0) {
+    } else if (badge & BADGE_INT_THRD) {
         // special case if SOS itself is faulting
         switch(fault) {
             case seL4_Fault_NullFault:
                 resume = true;
                 break;
             case seL4_Fault_VMFault:
-                if(!sos_vm_fault(&message))
+                if(!sos_vm_fault(badge, &message))
                     ZF_LOGF("Unhandled VM fault on SOS thread");
                 resume = true;
                 break;

@@ -20,6 +20,11 @@
 // badge for musl memory allocator delegate operations
 #define BADGE_MALLOC    (0x10003)
 
+// badge flag for SOS internal threads
+#define BADGE_INT_THRD  (0x20000)
+
+#define SOS_MAX_THREAD (CONFIG_SOS_MAX_PID + CONFIG_SOS_EXTRA_THREADS)
+
 typedef uintptr_t userptr_t;
 
 typedef int16_t sos_pid_t;

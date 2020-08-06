@@ -235,7 +235,14 @@ seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_fram
     // and we'll left puzzled otherwise!
     bool frameref_pin_status = frame_set_pin(frameref, true);
 
-    err = cspace_copy(&cspace, mapped_frame, &cspace, frame_page(frameref), seL4_AllRights);
+    seL4_CPtr orig_fr_cap = frame_page(frameref);
+    if(!orig_fr_cap) {
+        cspace_free_slot(&cspace, mapped_frame);
+        ZF_LOGE("Not enough memory when allocating frame");
+        err = seL4_NotEnoughMemory;
+        goto finish4;
+    }
+    err = cspace_copy(&cspace, mapped_frame, &cspace, orig_fr_cap, seL4_AllRights);
     if(err != seL4_NoError) {
         cspace_free_slot(&cspace, mapped_frame);
         ZF_LOGE("Cannot copy frame capability for mapping: %d\n", err);

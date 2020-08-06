@@ -65,7 +65,7 @@ bool bgworker_create(sos_pid_t pid)
     // set notification to 0, so that we can wait for child to finish
     seL4_Poll(bd->ntfn, NULL);
     
-    bd->workerthread = spawn(bgworker_loop, bd, "bgworker", 0, 0, 0);
+    bd->workerthread = spawn(bgworker_loop, bd, "bgworker", 0);
     if(!bd->workerthread) {
         ZF_LOGE("Error creating background thread for PID %d", pid);
         goto on_error;

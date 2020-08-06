@@ -764,6 +764,9 @@ bool page_out_frame(frame_ref_t frame_ref)
 
         // and mark the frame object as such
         fr->paged = true;
+    } else {
+        // a condition that should not occur
+        assert(false);
     }
     return true;
 }
@@ -790,5 +793,10 @@ void frame_set_file_backing(frame_ref_t frame_ref, sos_filehandle_t* backer, siz
         // remember that we only support read only here
         if(!fr->paged) 
             page_out_frame(frame_ref);
+        else {
+            // discard page file entry
+            assert(GET_BMP(frame_table.pf_bmp, fr->back_idx));
+            TOGGLE_BMP(frame_table.pf_bmp, fr->back_idx);
+        }
     }
 }

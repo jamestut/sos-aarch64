@@ -5,4 +5,4 @@
 
 bool vm_fault(seL4_MessageInfo_t* tag, seL4_Word badge);
 
-bool sos_vm_fault(seL4_MessageInfo_t* tag);
+bool sos_vm_fault(seL4_Word badge, seL4_MessageInfo_t* tag);

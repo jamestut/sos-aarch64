@@ -18,6 +18,7 @@
 #include <aos/debug.h>
 #include <cspace/cspace.h>
 #include <sos/gen_config.h>
+#include <setjmp.h>
 
 #include "ut.h"
 #include "vmem_layout.h"
@@ -26,8 +27,6 @@
 #include "vm/mapping2.h"
 
 #define SOS_THREAD_PRIORITY     (0)
-
-#define SOS_MAX_THREAD (CONFIG_SOS_MAX_PID + CONFIG_SOS_EXTRA_THREADS)
 
 #define SOS_THRD_IDX(thrd_ref) ((thrd_ref) - threads)
 
@@ -39,7 +38,7 @@
 
 #define SOS_THRD_STACK_TOP(thrd_ref) (SOS_THRD_STACK_BOTTOM((thrd_ref) + 1))
 
-static sos_thread_t threads[SOS_MAX_THREAD] = {0};
+sos_thread_t threads[SOS_MAX_THREAD] = {0};
 #define SOS_THREADS_BF_WORDS ((SOS_MAX_THREAD + 63) / 64)
 static uint64_t threads_usage[SOS_THREADS_BF_WORDS] = {0};
 
@@ -61,14 +60,15 @@ void init_threads(seL4_CPtr ep, seL4_CPtr sched_ctrl_start_, seL4_CPtr sched_ctr
     set_thread_active(0, true);
 }
 
-static bool alloc_stack(sos_thread_t* thread, bool is_system, seL4_Word system_stack_pages, uintptr_t* sp)
+static bool alloc_stack(sos_thread_t* thread, bool is_system, seL4_Word system_stack_pages, uintptr_t* sp, uintptr_t* stack_base)
 {
     static uintptr_t curr_stack = SOS_STACK + SOS_STACK_PAGES * PAGE_SIZE_4K;
 
     uint32_t stack_pages = is_system ? system_stack_pages : CONFIG_SOS_INT_THREADS_STACK_PAGES;
 
     // add a guard page
-    curr_stack += PAGE_SIZE_4K;
+    *stack_base = curr_stack += PAGE_SIZE_4K;
+    // sp is the top of the stack
     *sp = (curr_stack += stack_pages * PAGE_SIZE_4K);
 
     for (int i = 0; i < stack_pages; i++) {
@@ -129,10 +129,15 @@ static void thread_trampoline(sos_thread_t *thread, thread_main_f *function, voi
     thread_suspend(thread);
 }
 
+void thread_wrap(void)
+{
+    longjmp(current_thread->jump_on_fault.ret, 1);
+}
+
 /*
  * Spawn a new kernel (SOS) thread to execute function with arg
  */
-sos_thread_t *thread_create(thread_main_f function, void *arg, const char* name, seL4_Word badge, bool resume, seL4_CPtr ep, seL4_Word prio, bool is_system, seL4_Word system_stack_pages)
+sos_thread_t *thread_create(thread_main_f function, void *arg, const char* name, bool resume, seL4_CPtr ep, seL4_Word prio, bool is_system, seL4_Word system_stack_pages)
 {
     assert_main_thread();
     seL4_Word err;
@@ -149,6 +154,8 @@ sos_thread_t *thread_create(thread_main_f function, void *arg, const char* name,
         ZF_LOGE("Cannot allocate new thread");
         return NULL;
     }
+
+    seL4_Word badge = BADGE_INT_THRD + thread_idx;
 
     // instead of a counter that increase monotically, we propose something like this!
     seL4_Word curr_ipc_buf = SOS_THRD_IPC_BUFF_VADDR(new_thread);
@@ -268,7 +275,7 @@ sos_thread_t *thread_create(thread_main_f function, void *arg, const char* name,
     /* set up the stack */
     // sp is top of the stack
     if(!new_thread->sp) {
-        if (!alloc_stack(new_thread, is_system, system_stack_pages, &new_thread->sp)) {
+        if (!alloc_stack(new_thread, is_system, system_stack_pages, &new_thread->sp, &new_thread->stack_base)) {
             new_thread->sp = 0;
             goto on_error;
         }
@@ -308,6 +315,8 @@ void thread_destroy(sos_thread_t* thread)
         return;
 
     set_thread_active(thread_idx, false);
+    
+    thread->jump_on_fault.enabled = false;
 
     if(thread->tcb)
         cap_ut_dealloc(&thread->tcb, &thread->tcb_ut);
@@ -327,14 +336,14 @@ void thread_destroy(sos_thread_t* thread)
     }
 }
 
-sos_thread_t *spawn(thread_main_f function, void *arg, const char* name, seL4_Word badge, seL4_CPtr ep, seL4_Word prio)
+sos_thread_t *spawn(thread_main_f function, void *arg, const char* name, seL4_Word prio)
 {
-    return thread_create(function, arg, name, badge, true, ep == seL4_CapNull ? ipc_ep : ep, prio, false, 0);
+    return thread_create(function, arg, name, true, ipc_ep, prio, false, 0);
 }
 
 sos_thread_t *spawn_system(thread_main_f function, void *arg, const char* name, seL4_CPtr ep, seL4_Word prio, seL4_Word stack_pages)
 {
-    return thread_create(function, arg, name, 0, true, ep == seL4_CapNull ? ipc_ep : ep, prio, true, stack_pages);
+    return thread_create(function, arg, name, true, ep ? ep : ipc_ep, prio, true, stack_pages);
 }
 
 static void set_thread_active(int index, bool active)

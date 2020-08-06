@@ -179,7 +179,7 @@ void user_start_process_bg(void* pparam)
     proctable_t* pt = proctable + param->pid;
     bool success = start_process_load_elf(param->pid);
 
-    pt->loader_state.filename[param->filename_termpos - 1] = param->filename_term;
+    pt->loader_state.filename[param->filename_termpos] = param->filename_term;
     delegate_userptr_unmap(pt->loader_state.filename);
     pt->loader_state.filename = NULL;
     
