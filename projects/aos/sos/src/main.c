@@ -106,9 +106,6 @@ cspace_t cspace;
 /* scratch address space */
 dynarray_t scratchas;
 
-/* Endpoint for musl memory allocator */
-seL4_CPtr malloc_ep = 0;
-
 static seL4_CPtr sched_ctrl_start;
 static seL4_CPtr sched_ctrl_end;
 
@@ -354,9 +351,6 @@ NORETURN void syscall_loop(seL4_CPtr ep)
         } else if (label == seL4_Fault_NullFault) {
             switch(badge)
             {
-                case BADGE_MALLOC:
-                    malloc_delegate(*reply);
-                    break;
                 case BADGE_IO_FINISH:
                     ZF_LOGI("carrying on pending process destroy for PID %d", seL4_GetMR(0));
                     if(proctable[seL4_GetMR(0)].state_flag & PROC_STATE_PENDING_KILL)
@@ -484,11 +478,6 @@ NORETURN void *main_continued(UNUSED void *arg)
     );
     frame_table_init(&cspace, seL4_CapInitThreadVSpace);
 
-    // IPC for malloc
-    ZF_LOGF_IF(!(malloc_ep = cspace_alloc_slot(&cspace)), "Unable to allocate slot for malloc endpoint");
-    ZF_LOGF_IF(cspace_mint(&cspace, malloc_ep, &cspace, ipc_ep, seL4_AllRights, BADGE_MALLOC) != seL4_NoError,
-        "Unable to mint malloc endpoint");
-
     // fill in SOS' own process data!
     set_pid_state(0, true);
     proctable[0].vspace = seL4_CapInitThreadVSpace;
@@ -513,6 +502,9 @@ NORETURN void *main_continued(UNUSED void *arg)
      * sos uses the watchdog timers on this page to implement reset infrastructure & network ticks,
      * so touching the watchdog timers here is not recommended!) */
     void *timer_vaddr = sos_map_device(&cspace, PAGE_ALIGN_4K(TIMER_MAP_BASE), PAGE_SIZE_4K);
+
+    // init separate thread for malloc
+    malloc_ts_init();
 
     /* Initialise the network hardware. (meson ethernet for now) */
     #ifdef CONFIG_PLAT_ODROIDC2

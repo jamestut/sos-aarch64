@@ -7,6 +7,9 @@
 #include <stdbool.h>
 #include <utils/util.h>
 #include <stdarg.h>
+#include <cspace/cspace.h>
+#include "utils.h"
+#include "threads.h"
 #include "threadassert.h"
 #include "mallocts.h"
 
@@ -18,12 +21,20 @@ typedef enum {
     MALLOC_OPS_FREE
 } MallocOps;
 
-extern seL4_CPtr malloc_ep;
+static seL4_CPtr malloc_ep = 0;
+static seL4_CPtr malloc_reply = 0;
+static sos_thread_t* malloc_thread = NULL;
+
+// for initialisation
+static seL4_CPtr malloc_ntfn;
+static ut_t* malloc_ntfn_ut;
+
+static void malloc_thread_entry(UNUSED void* param);
 
 static inline bool use_delegate() 
 {
-    // must run outside main thread and also has endpoint
-    return !is_main_thread() && malloc_ep;
+    // must has an endpoint and not in malloc thread
+    return malloc_ep && (current_thread == malloc_thread);
 }
 
 static uintptr_t do_delegate(seL4_Word cmd, size_t msgcount, ...) 
@@ -38,6 +49,26 @@ static uintptr_t do_delegate(seL4_Word cmd, size_t msgcount, ...)
     }
     seL4_Call(malloc_ep, msginfo);
     return seL4_GetMR(0);
+}
+
+void malloc_ts_init(void)
+{
+    malloc_ntfn_ut = alloc_retype(&malloc_ntfn, seL4_NotificationObject, seL4_NotificationBits);
+    ZF_LOGF_IF(!malloc_ntfn_ut, "Error creating malloc thread initializer notification");
+
+    seL4_Poll(malloc_ntfn, NULL);
+
+    // spawn needs malloc internally!
+    malloc_thread = spawn(malloc_thread_entry, NULL, "malloc_thread", 0);
+    ZF_LOGF_IF(!malloc_thread, "Unable to spawn malloc thread");
+
+    ZF_LOGF_IF(!alloc_retype(&malloc_ep, seL4_EndpointObject, seL4_EndpointBits),
+        "Error allocating endpoint for malloc");
+    ZF_LOGF_IF(!alloc_retype(&malloc_reply, seL4_ReplyObject, seL4_ReplyBits),
+        "Error allocating reply objec for malloc delegate");
+
+    // done. signal thread to proceed.
+    seL4_Signal(malloc_ntfn);
 }
 
 void *malloc(size_t n) 
@@ -69,7 +100,7 @@ void free(void* p)
         __free_full(p);
 }
 
-void malloc_delegate(seL4_CPtr reply) 
+static inline void malloc_delegate(seL4_CPtr reply) 
 {
     seL4_Word ret = 0;
     int hasret;
@@ -97,4 +128,16 @@ void malloc_delegate(seL4_CPtr reply)
     seL4_MessageInfo_t msginfo = seL4_MessageInfo_new(0, 0, 0, hasret);
     seL4_SetMR(0, ret);
     seL4_Send(reply, msginfo);
+}
+
+static void malloc_thread_entry(void* param)
+{
+    // wait until our endpoints are ready!
+    seL4_Wait(malloc_ntfn, NULL);
+
+    for(;;) {
+        seL4_Word badge;
+        seL4_MessageInfo_t message = seL4_Recv(malloc_ep, &badge, malloc_reply);
+        malloc_delegate(malloc_reply);
+    }
 }

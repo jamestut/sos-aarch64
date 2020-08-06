@@ -17,8 +17,6 @@
 #define BADGE_REPLY_RET (0x10001)
 // badge that some background worker will send upon IO completion and a kill is pending
 #define BADGE_IO_FINISH (0x10002)
-// badge for musl memory allocator delegate operations
-#define BADGE_MALLOC    (0x10003)
 
 // badge flag for SOS internal threads
 #define BADGE_INT_THRD  (0x20000)
