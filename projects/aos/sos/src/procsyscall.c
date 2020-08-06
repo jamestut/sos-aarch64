@@ -159,7 +159,8 @@ void invalidate_proc_list_cache()
 void refresh_proclist()
 {
     proclist_count = 0;
-    for(uint32_t i = 0; i < CONFIG_SOS_MAX_PID; ++i) {
+    // skip SOS system!
+    for(uint32_t i = 1; i < CONFIG_SOS_MAX_PID; ++i) {
         proctable_t* pt = proctable + i;
         if(pt->active) {
             sos_process_t* pl = proclist + proclist_count++;
