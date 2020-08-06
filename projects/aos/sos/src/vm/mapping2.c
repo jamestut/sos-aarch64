@@ -305,7 +305,7 @@ seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_fram
             goto maploopfinish;
         }
 
-        frame_set_pin(contpd_frame, true);
+        bool contpd_frame_pin_status = frame_set_pin(contpd_frame, true);
         contpd = frame_data(contpd_frame);
         if(!contpd) {
             sperr = seL4_NotEnoughMemory;
@@ -395,7 +395,7 @@ seL4_Error grp01_map_frame(seL4_Word badge, frame_ref_t frameref, bool free_fram
         err = seL4_ARM_Page_Map(mapped_frame, vspace, vaddr, rights, attr);
 
     maploopfinish:
-        frame_set_pin(contpd_frame, false);
+        frame_set_pin(contpd_frame, contpd_frame_pin_status);
         if(sperr) {
             err = sperr;
             goto finish;
