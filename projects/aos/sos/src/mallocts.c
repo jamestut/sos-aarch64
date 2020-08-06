@@ -34,7 +34,7 @@ static void malloc_thread_entry(UNUSED void* param);
 static inline bool use_delegate() 
 {
     // must has an endpoint and not in malloc thread
-    return malloc_ep && (current_thread == malloc_thread);
+    return malloc_ep && (current_thread != malloc_thread);
 }
 
 static uintptr_t do_delegate(seL4_Word cmd, size_t msgcount, ...) 

@@ -306,7 +306,7 @@ void handle_fault(seL4_Word badge, seL4_MessageInfo_t message, seL4_CPtr reply)
         seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 0);
         seL4_Send(reply, msg);
     } else {
-        if(!badge) {
+        if(badge & BADGE_INT_THRD) {
             // this means that one of our thread is faulting. this is fatal!
             ZF_LOGF("SOS thread unhandled fault. Aborting.");
         } else {
