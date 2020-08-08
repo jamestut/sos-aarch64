@@ -601,6 +601,11 @@ static void remove_frame(frame_list_t *list, frame_t *frame)
 
 static frame_t *alloc_fresh_frame(void)
 {
+    if(frame_table.used >= BIT(FRAME_TABLE_BITS)) {
+        ZF_LOGI("Maximum amount of frame reference reached");
+        return 0;
+    }
+
     assert(frame_table.used <= frame_table.capacity);
 
     if (frame_table.used == frame_table.capacity) {
