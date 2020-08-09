@@ -176,8 +176,8 @@ void frame_table_init_page_file()
     page_file.fh = find_handler("fake");
     page_file.id = page_file.fh->open(0, "fake", O_RDWR);
     #else
-    page_file.fh = find_handler("pf");
-    page_file.id = page_file.fh->open(0, "pf", O_RDWR);
+    page_file.fh = find_handler(CONFIG_SOS_PF_NAME);
+    page_file.id = page_file.fh->open(0, CONFIG_SOS_PF_NAME, O_RDWR);
     #endif
 }
 

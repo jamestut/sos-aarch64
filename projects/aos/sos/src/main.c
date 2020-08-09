@@ -202,7 +202,7 @@ bool handle_syscall(seL4_Word badge, seL4_Word msglen, seL4_CPtr reply)
         break;
 
     case SOS_SYSCALL_USLEEP:
-        handler_ret = ts_usleep(seL4_GetMR(1), reply);
+        handler_ret = ts_usleep(badge, seL4_GetMR(1), reply);
         break;
     
     case SOS_SYSCALL_TIMESTAMP:

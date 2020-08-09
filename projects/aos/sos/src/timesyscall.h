@@ -8,4 +8,6 @@
 
 int64_t ts_get_timestamp();
 
-int32_t ts_usleep(ssize_t msec, seL4_CPtr reply);
+int32_t ts_usleep(seL4_Word badge, ssize_t msec, seL4_CPtr reply);
+
+void ts_cancel_sleep(seL4_Word badge);

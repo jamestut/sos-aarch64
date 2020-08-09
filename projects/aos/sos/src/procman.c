@@ -10,6 +10,7 @@
 #include "vm/mapping2.h"
 #include "elfload.h"
 #include "delegate.h"
+#include "timesyscall.h"
 #include <clock/clock.h>
 #include <stdbool.h>
 #include <aos/debug.h>
@@ -503,6 +504,9 @@ void destroy_process(sos_pid_t pid)
         sos_reuse_reply(pt->waitee_reply);
         pt->wait_target = pt->waitee_reply = 0;
     }
+
+    // free sleeper if any
+    ts_cancel_sleep(pid);
     
     // finally:
     // we only set the fields here to zero. callers are expected

@@ -11,6 +11,7 @@
 #include <grp01/misc.h>
 
 #define MMAP_SUPPORTED_FLAGS (MAP_ANON | MAP_PRIVATE)
+#define PROCESS_STACK_ABSOLUTE_MIN_PAGES 2
 
 ssize_t handle_brk(dynarray_t* arr, seL4_Word badge, seL4_CPtr vspace, uintptr_t target)
 {
@@ -231,8 +232,8 @@ ssize_t handle_grow_stack(dynarray_t* asarr, seL4_Word badge, seL4_CPtr vspace, 
     numpages += bypage;
 
     // truncate min
-    if(numpages < PROCESS_STACK_MIN_PAGES)
-        numpages = PROCESS_STACK_MIN_PAGES;
+    if(numpages < PROCESS_STACK_ABSOLUTE_MIN_PAGES)
+        numpages = PROCESS_STACK_ABSOLUTE_MIN_PAGES;
 
     uintptr_t newbegin = stackas->end - (numpages << seL4_PageBits);
     // check for region collision
