@@ -64,25 +64,16 @@ long sys_writev(va_list ap)
     }
 
     /* Write the buffer to console if the fd is for stdout or stderr. */
-    if (fildes == STDOUT_FD || fildes == STDERR_FD) {
-        for (int i = 0; i < iovcnt; i++) {
-            size_t nr = sos_write(iov[i].iov_base, iov[i].iov_len);
+    for (int i = 0; i < iovcnt; i++) {
+        int nr = sos_sys_write(fildes, iov[i].iov_base, iov[i].iov_len);
 
-            ret += nr;
-            if (nr != iov[i].iov_len) break;
+        if (nr < 0) {
+            if (!ret) ret = nr;
+            break;
         }
-    } else {
-        for (int i = 0; i < iovcnt; i++) {
-            int nr = sos_sys_write(fildes, iov[i].iov_base, iov[i].iov_len);
 
-            if (nr < 0) {
-                if (!ret) ret = nr;
-                break;
-            }
-
-            ret += nr;
-            if (nr != iov[i].iov_len) break;
-        }
+        ret += nr;
+        if (nr != iov[i].iov_len) break;
     }
 
     return ret;
@@ -148,20 +139,6 @@ long sys_ioctl(va_list ap)
 static long sos_sys_open_wrapper(const char *pathname, int flags)
 {
     long fd = sos_sys_open(pathname, flags);
-    if (fd == STDIN_FD || fd == STDOUT_FD || fd == STDERR_FD) {
-        /* Internally muslc believes it is on a posix system with
-         * stdin, stdout and stderr already open with fd's 0, 1 and 2
-         * respectively. To make the system semi-sane we want to
-         * allow muslc to keep using them so that such usages
-         * can easily be detected. This means that your system
-         * should not be returning these fd's as a result of
-         * open calls otherwise things will get confusing. If you
-         * do chose to have these fd's already open and existing
-         * then you can remove this check. But make sure you
-         * understand what is going on first! */
-        assert(!"muslc is now going to be very confused");
-        return -ENOMEM;
-    }
 
     return fd;
 }

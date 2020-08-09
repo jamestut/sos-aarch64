@@ -13,7 +13,6 @@
 #pragma once
 
 #include <sel4/sel4.h>
-#include <vka/vka.h>
 #include <sync/bin_sem.h>
 
 typedef sync_bin_sem_t sync_mutex_t;
@@ -38,21 +37,5 @@ static inline int sync_mutex_lock(sync_mutex_t *mutex) {
  * @return              0 on success, an error code on failure. */
 static inline int sync_mutex_unlock(sync_mutex_t *mutex) {
     return sync_bin_sem_post(mutex);
-}
-
-/* Allocate and initialise a managed mutex
- * @param vka           A VKA instance used to allocate a notification object.
- * @param mutex         A mutex object to initialise.
- * @return              0 on success, an error code on failure. */
-static inline int sync_mutex_new(vka_t *vka, sync_mutex_t *mutex) {
-    return sync_bin_sem_new(vka, mutex, 1);
-}
-
-/* Deallocate a managed mutex (do not use with sync_mutex_init)
- * @param vka           A VKA instance used to deallocate the notification object.
- * @param mutex         A mutex object initialised by sync_mutex_new.
- * @return              0 on success, an error code on failure. */
-static inline int sync_mutex_destroy(vka_t *vka, sync_mutex_t *mutex) {
-    return sync_bin_sem_destroy(vka, mutex);
 }
 

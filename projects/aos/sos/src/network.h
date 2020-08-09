@@ -11,8 +11,10 @@
  */
 #pragma once
 
-#include <sel4/types.h>
+#include <sel4/sel4.h>
 #include <cspace/cspace.h>
+#include <sys/time.h>
+#include <nfsc/libnfs.h>
 
 /**
  * Initialises the network stack
@@ -25,3 +27,25 @@
  *                       and has a completely different programming model!)
  */
 void network_init(cspace_t *cspace, void *timer_vaddr, seL4_CPtr irq_ntfn);
+
+// NFS related functions
+bool check_nfs_mount_status(void);
+
+// call these NFS functions from main thread
+int sos_libnfs_open_async(const char *path, int flags, nfs_cb cb, void *private_data);
+
+int sos_libnfs_pread_async(struct nfsfh *nfsfh, uint64_t offset, 
+    uint64_t count, nfs_cb cb, void *private_data);
+
+int sos_libnfs_pwrite_async(struct nfsfh *nfsfh, uint64_t offset, 
+    uint64_t count, const void *buf, nfs_cb cb, void *private_data);
+
+int sos_libnfs_close_async(struct nfsfh *nfsfh, nfs_cb cb, void *private_data);
+
+int sos_libnfs_stat_async(const char *path, nfs_cb cb, void *private_data);
+
+int sos_libnfs_opendir_async(const char *path, nfs_cb cb, void *private_data);
+
+const char* sos_libnfs_readdir(struct nfsdir *nfsdir, size_t pos);
+
+void sos_libnfs_closedir(struct nfsdir *nfsfh);

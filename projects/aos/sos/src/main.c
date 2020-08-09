@@ -10,11 +10,14 @@
  * @TAG(DATA61_GPL)
  */
 #include <autoconf.h>
+#include <sos/gen_config.h>
 #include <utils/util.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
 #include <string.h>
+
+#include <errno.h>
 
 #include <cspace/cspace.h>
 #include <aos/sel4_zf_logif.h>
@@ -22,11 +25,14 @@
 
 #include <clock/clock.h>
 #include <cpio/cpio.h>
-#include <elf/elf.h>
 #include <serial/serial.h>
 
 #include <sel4runtime.h>
 #include <sel4runtime/auxv.h>
+
+#include <sync/mutex.h>
+
+#include <sossysnr.h>
 
 #include "bootstrap.h"
 #include "irq.h"
@@ -42,6 +48,34 @@
 #include "utils.h"
 #include "threads.h"
 
+#include "grp01.h"
+#include "threadassert.h"
+#include "grp01/dynaarray.h"
+#include "fs/fake.h"
+#include "fs/cpiofs.h"
+
+// GRP01: M1
+#include "fakes/timer.h"
+// GRP01: M2
+#include "fs/console.h"
+#include "fileman.h"
+#include "bgworker.h"
+#include "timesyscall.h"
+// GRP01: M3
+#include "vm/mapping2.h"
+#include "vm/addrspace.h"
+#include "vm/syshandlers.h"
+#include "vm/faulthandler.h"
+// GRP01: M4
+#include "delegate.h"
+#include "fs/nfs.h"
+// GRP01: rearch
+#include "proctable.h"
+// GRP01: M6
+#include "procman.h"
+#include "procsyscall.h"
+#include "maininterface.h"
+
 #include <aos/vsyscall.h>
 
 /*
@@ -56,18 +90,7 @@
 #define IRQ_EP_BADGE         BIT(seL4_BadgeBits - 1ul)
 #define IRQ_IDENT_BADGE_BITS MASK(seL4_BadgeBits - 1ul)
 
-#define TTY_NAME             "tty_test"
-#define TTY_PRIORITY         (0)
-#define TTY_EP_BADGE         (101)
-
-/* The number of additional stack pages to provide to the initial
- * process */
-#define INITIAL_PROCESS_EXTRA_STACK_PAGES 4
-
-/*
- * A dummy starting syscall
- */
-#define SOS_SYSCALL0 0
+#define FIRST_PROC_NAME             "sosh"
 
 /* The linker will link this symbol to the start address  *
  * of an archive of attached applications.                */
@@ -80,388 +103,287 @@ extern void (__register_frame)(void *);
 /* root tasks cspace */
 cspace_t cspace;
 
+/* scratch address space */
+dynarray_t scratchas;
+
 static seL4_CPtr sched_ctrl_start;
 static seL4_CPtr sched_ctrl_end;
 
-/* the one process we start */
-static struct {
-    ut_t *tcb_ut;
-    seL4_CPtr tcb;
-    ut_t *vspace_ut;
-    seL4_CPtr vspace;
+// for debugging
+uintptr_t main_ipc_buff;
 
-    ut_t *ipc_buffer_ut;
-    seL4_CPtr ipc_buffer;
+// reply objects
+#define REPLY_OBJ_COUNT ((CONFIG_SOS_MAX_PID)*2)
+#define REPLY_POS_INC(x) (((x) + 1) % REPLY_OBJ_COUNT)
+#define REPLY_OBJ_FULL (REPLY_POS_INC(replyobjs.prodpos) == replyobjs.conspos)
+#define REPLY_OBJ_EMPTY (replyobjs.prodpos == replyobjs.conspos)
 
-    ut_t *sched_context_ut;
-    seL4_CPtr sched_context;
+struct {
+    seL4_CPtr data[REPLY_OBJ_COUNT];
+    uint16_t prodpos;
+    uint16_t conspos;
+} replyobjs = {0};
 
-    cspace_t cspace;
-
-    ut_t *stack_ut;
-    seL4_CPtr stack;
-} tty_test_process;
-
-
-void handle_syscall(UNUSED seL4_Word badge, UNUSED int num_args, seL4_CPtr reply)
+bool handle_syscall(seL4_Word badge, seL4_Word msglen, seL4_CPtr reply)
 {
 
     /* get the first word of the message, which in the SOS protocol is the number
      * of the SOS "syscall". */
     seL4_Word syscall_number = seL4_GetMR(0);
 
+    // store whatever the handler returns, and pass to app if non zero.
+    seL4_Word handler_ret = ENOSYS;
+
+    // check if badge corresponds to a valid process table entry
+    proctable_t* pt = NULL;
+    if(badge == 0 || badge >= CONFIG_SOS_MAX_PID) {
+        handler_ret = ESRCH;
+        goto finish;
+    }
+    else {
+        pt = proctable + badge;
+        if(!pt->active) {
+            handler_ret = ESRCH;
+            goto finish;
+        }
+    }
+
     /* Process system call */
     switch (syscall_number) {
-    case SOS_SYSCALL0:
-        ZF_LOGV("syscall: thread example made syscall 0!\n");
-        /* construct a reply message of length 1 */
-        seL4_MessageInfo_t reply_msg = seL4_MessageInfo_new(0, 0, 0, 1);
-        /* Set the first (and only) word in the message to 0 */
-        seL4_SetMR(0, 0);
-        /* Send the reply to the saved reply capability. */
-        seL4_Send(reply, reply_msg);
-        /* in MCS kernel, reply object is meant to be reused rather than freed */
-        /* Free the slot we allocated for the reply - it is now empty, as the reply
-         * capability was consumed by the send. */
-        cspace_free_slot(&cspace, reply);
+    case SOS_SYSCALL_OPEN:
+        handler_ret = fileman_open(badge, reply, 
+            seL4_GetMR(1), seL4_GetMR(2), false, seL4_GetMR(3));
+        break;
+    
+    case SOS_SYSCALL_CLOSE:
+        handler_ret = fileman_close(badge, reply, seL4_GetMR(1));
+        break;
+    
+    case SOS_SYSCALL_READ:
+        handler_ret = fileman_read(badge, seL4_GetMR(1), reply, 
+            seL4_GetMR(2), seL4_GetMR(3));
         break;
 
+    case SOS_SYSCALL_WRITE: 
+        handler_ret = fileman_write(badge, seL4_GetMR(1), reply, 
+            seL4_GetMR(2), seL4_GetMR(3));
+        break;
+
+    case SOS_SYSCALL_STAT:
+        handler_ret = fileman_stat(badge, reply, seL4_GetMR(1),
+            seL4_GetMR(2));
+        break;
+
+    case SOS_SYSCALL_OPENDIR:
+        handler_ret = fileman_open(badge, reply, 
+            seL4_GetMR(1), seL4_GetMR(2), true, 0);
+        break;
+
+    case SOS_SYSCALL_DIRREAD:
+        handler_ret = fileman_readdir(badge, seL4_GetMR(1), reply,
+            seL4_GetMR(2), seL4_GetMR(3), seL4_GetMR(4));
+        break;
+
+    case SOS_SYSCALL_MMAP:
+        handler_ret = handle_mmap(&pt->as, seL4_GetMR(1), seL4_GetMR(2), seL4_GetMR(3), 
+            seL4_GetMR(4), seL4_GetMR(5), seL4_GetMR(6));
+        break;
+
+    case SOS_SYSCALL_MUNMAP:
+        handler_ret = handle_munmap(&pt->as, badge, pt->vspace, seL4_GetMR(1), seL4_GetMR(2));
+        break;
+
+    case SOS_SYSCALL_BRK:
+        handler_ret = handle_brk(&pt->as, badge, pt->vspace, seL4_GetMR(1));
+        break;
+
+    case SOS_SYSCALL_GROW_STACK:
+        handler_ret = handle_grow_stack(&pt->as, badge, pt->vspace, seL4_GetMR(1));
+        break;
+
+    case SOS_SYSCALL_USLEEP:
+        handler_ret = ts_usleep(badge, seL4_GetMR(1), reply);
+        break;
+    
+    case SOS_SYSCALL_TIMESTAMP:
+        handler_ret = ts_get_timestamp();
+        break;
+
+    case SOS_SYSCALL_MY_ID:
+        handler_ret = badge;
+        break;
+
+    case SOS_SYSCALL_LIST_PROC:
+        handler_ret = proc_list(badge, seL4_GetMR(1), seL4_GetMR(2));
+        break;
+
+    case SOS_SYSCALL_PROC_NEW:
+        handler_ret = user_new_proc(badge, seL4_GetMR(1), seL4_GetMR(2), reply);
+        break;
+
+    case SOS_SYSCALL_PROC_DEL:
+        handler_ret = user_delete_proc(seL4_GetMR(1));
+        break;
+
+    case SOS_SYSCALL_WAITPID:
+        handler_ret = user_wait_proc(badge, seL4_GetMR(1), reply);
+        break;
+
+    case SOS_SYSCALL_UNIMPLEMENTED:
+        // just print this message as specified :)
+        puts("system call not implemented");
+        handler_ret = ENOSYS;
+        break;
+        
     default:
         ZF_LOGE("Unknown syscall %lu\n", syscall_number);
-        /* don't reply to an unknown syscall */
+    }
+
+    // reply if handler_ret is not 0. otherwise, we assume that the handler will
+    // reply at some later point
+finish:
+    if(handler_ret) {
+        seL4_MessageInfo_t reply_msg = seL4_MessageInfo_new(0, 0, 0, 1);
+        seL4_SetMR(0, handler_ret);
+        seL4_Send(reply, reply_msg);
+    }
+    // if we've replied, returns true, so that syscall_loop knows that it can reuse the 
+    // reply object
+    return handler_ret;
+}
+
+void handle_fault(seL4_Word badge, seL4_MessageInfo_t message, seL4_CPtr reply)
+{
+    seL4_Fault_tag_t fault = seL4_MessageInfo_get_label(message);
+    char msgbuff[32];
+    snprintf(msgbuff, sizeof(msgbuff)-1, "thrd_badge_%lu", badge);
+
+    bool resume = false;
+
+    if(badge >= 1 && badge < CONFIG_SOS_MAX_PID) {
+        proctable_t* pt = proctable + badge;
+        // must be from our processes!
+        if(!pt->active) {
+            snprintf(msgbuff, sizeof(msgbuff)-1, "invalid_%lu", badge);
+            ZF_LOGE("Received invalid fault with badge: %ld", badge);
+            debug_print_fault(message, msgbuff);
+        } else {
+            switch(fault) {
+                case seL4_Fault_NullFault:
+                    resume = true;
+                    break;
+                case seL4_Fault_VMFault:
+                    // if vm_fault returns false, vm_fault will debug print the cause instead :)
+                    if(vm_fault(&message, badge))
+                        resume = true;
+                    break;
+                default:
+                    debug_print_fault(message, msgbuff);
+                    ZF_LOGW("Received fault %d from process %d, which is not handled.", fault, badge);
+                    break;
+            }
+        }
+    } else if (badge & BADGE_INT_THRD) {
+        // special case if SOS itself is faulting
+        switch(fault) {
+            case seL4_Fault_NullFault:
+                resume = true;
+                break;
+            case seL4_Fault_VMFault:
+                if(!sos_vm_fault(badge, &message))
+                    ZF_LOGF("Unhandled VM fault on SOS thread");
+                resume = true;
+                break;
+            default:
+                ZF_LOGF("Unknown SOS fault: %d", fault);
+        }
+    } else {
+        debug_print_fault(message, msgbuff);
+        ZF_LOGF("Unknown fault from badge %d. Don't know what to do!", badge);
+    }
+
+    if(resume) {
+        seL4_MessageInfo_t msg = seL4_MessageInfo_new(0, 0, 0, 0);
+        seL4_Send(reply, msg);
+    } else {
+        if(badge & BADGE_INT_THRD) {
+            // this means that one of our thread is faulting. this is fatal!
+            ZF_LOGF("SOS thread unhandled fault. Aborting.");
+        } else {
+            printf("Process %d will be killed.\n", badge);
+            destroy_process(badge);
+        }
     }
 }
 
 NORETURN void syscall_loop(seL4_CPtr ep)
 {
-    seL4_CPtr reply;
-    /* Create reply object */
-    ut_t *reply_ut = alloc_retype(&reply, seL4_ReplyObject, seL4_ReplyBits);
-    if (reply_ut == NULL) {
-        ZF_LOGF("Failed to alloc reply object ut");
-    }
+    // cons == prod     : empty
+    // prod == cons - 1 : full
+    replyobjs.prodpos = REPLY_OBJ_COUNT - 1;
+    replyobjs.conspos = 0; 
 
     while (1) {
+        // it is impossible that the reply object is full, as there is at most
+        // number of processes + 1 outstanding threads. all background thread handlers
+        // are expected to return the reply object after they finished.
+        ZF_LOGF_IF(REPLY_OBJ_EMPTY, "Reply object array is empty @ syscall_loop!");
+
+        /* Create reply object if needed */
+        seL4_CPtr* reply = replyobjs.data + replyobjs.conspos;
+        if(!*reply) 
+            ZF_LOGF_IF(!alloc_retype(reply, seL4_ReplyObject, seL4_ReplyBits),
+                "Cannot allocate reply object");
+            
         seL4_Word badge = 0;
         /* Block on ep, waiting for an IPC sent over ep, or
          * a notification from our bound notification object */
-        seL4_MessageInfo_t message = seL4_Recv(ep, &badge, reply);
+        seL4_MessageInfo_t message = seL4_Recv(ep, &badge, *reply);
         /* Awake! We got a message - check the label and badge to
          * see what the message is about */
         seL4_Word label = seL4_MessageInfo_get_label(message);
+        seL4_Word msglen = seL4_MessageInfo_get_length(message);
 
         if (badge & IRQ_EP_BADGE) {
             /* It's a notification from our bound notification
              * object! */
             sos_handle_irq_notification(&badge);
         } else if (label == seL4_Fault_NullFault) {
-            /* It's not a fault or an interrupt, it must be an IPC
-             * message from tty_test! */
-            handle_syscall(badge, seL4_MessageInfo_get_length(message) - 1, reply);
+            switch(badge)
+            {
+                case BADGE_IO_FINISH:
+                    ZF_LOGI("carrying on pending process destroy for PID %d", seL4_GetMR(0));
+                    if(proctable[seL4_GetMR(0)].state_flag & PROC_STATE_PENDING_KILL)
+                        proctable[seL4_GetMR(0)].state_flag ^= PROC_STATE_PENDING_KILL;
+                    destroy_process(seL4_GetMR(0));
+                    break;
+                case BADGE_DELEGATE:
+                    handle_delegate_req(badge, msglen, *reply);
+                    break;
+                case BADGE_REPLY_RET:
+                    // we trust whoever send us this!
+                    sos_reuse_reply(seL4_GetMR(0));
+                    // reply!
+                    message = seL4_MessageInfo_new(0, 0, 0, 0);
+                    seL4_Send(*reply, message);
+                    break;
+                default:
+                    // handle_syscall returns false if it needs the reply object later
+                    if(!handle_syscall(badge, msglen, *reply)) 
+                        replyobjs.conspos = REPLY_POS_INC(replyobjs.conspos);
+            }
         } else {
-            /* some kind of fault */
-            debug_print_fault(message, TTY_NAME);
-            /* dump registers too */
-            debug_dump_registers(tty_test_process.tcb);
-
-            ZF_LOGF("The SOS skeleton does not know how to handle faults!");
+            handle_fault(badge, message, *reply);
         }
     }
 }
 
-static int stack_write(seL4_Word *mapped_stack, int index, uintptr_t val)
+void sos_reuse_reply(seL4_CPtr reply)
 {
-    mapped_stack[index] = val;
-    return index - 1;
-}
-
-/* set up System V ABI compliant stack, so that the process can
- * start up and initialise the C library */
-static uintptr_t init_process_stack(cspace_t *cspace, seL4_CPtr local_vspace, elf_t *elf_file)
-{
-    /* Create a stack frame */
-    tty_test_process.stack_ut = alloc_retype(&tty_test_process.stack, seL4_ARM_SmallPageObject, seL4_PageBits);
-    if (tty_test_process.stack_ut == NULL) {
-        ZF_LOGE("Failed to allocate stack");
-        return 0;
-    }
-
-    /* virtual addresses in the target process' address space */
-    uintptr_t stack_top = PROCESS_STACK_TOP;
-    uintptr_t stack_bottom = PROCESS_STACK_TOP - PAGE_SIZE_4K;
-    /* virtual addresses in the SOS's address space */
-    void *local_stack_top  = (seL4_Word *) SOS_SCRATCH;
-    uintptr_t local_stack_bottom = SOS_SCRATCH - PAGE_SIZE_4K;
-
-    /* find the vsyscall table */
-    uintptr_t sysinfo = *((uintptr_t *) elf_getSectionNamed(elf_file, "__vsyscall", NULL));
-    if (sysinfo == 0) {
-        ZF_LOGE("could not find syscall table for c library");
-        return 0;
-    }
-
-    /* Map in the stack frame for the user app */
-    seL4_Error err = map_frame(cspace, tty_test_process.stack, tty_test_process.vspace, stack_bottom,
-                               seL4_AllRights, seL4_ARM_Default_VMAttributes);
-    if (err != 0) {
-        ZF_LOGE("Unable to map stack for user app");
-        return 0;
-    }
-
-    /* allocate a slot to duplicate the stack frame cap so we can map it into our address space */
-    seL4_CPtr local_stack_cptr = cspace_alloc_slot(cspace);
-    if (local_stack_cptr == seL4_CapNull) {
-        ZF_LOGE("Failed to alloc slot for stack");
-        return 0;
-    }
-
-    /* copy the stack frame cap into the slot */
-    err = cspace_copy(cspace, local_stack_cptr, cspace, tty_test_process.stack, seL4_AllRights);
-    if (err != seL4_NoError) {
-        cspace_free_slot(cspace, local_stack_cptr);
-        ZF_LOGE("Failed to copy cap");
-        return 0;
-    }
-
-    /* map it into the sos address space */
-    err = map_frame(cspace, local_stack_cptr, local_vspace, local_stack_bottom, seL4_AllRights,
-                    seL4_ARM_Default_VMAttributes);
-    if (err != seL4_NoError) {
-        cspace_delete(cspace, local_stack_cptr);
-        cspace_free_slot(cspace, local_stack_cptr);
-        return 0;
-    }
-
-    int index = -2;
-
-    /* null terminate the aux vectors */
-    index = stack_write(local_stack_top, index, 0);
-    index = stack_write(local_stack_top, index, 0);
-
-    /* write the aux vectors */
-    index = stack_write(local_stack_top, index, PAGE_SIZE_4K);
-    index = stack_write(local_stack_top, index, AT_PAGESZ);
-
-    index = stack_write(local_stack_top, index, sysinfo);
-    index = stack_write(local_stack_top, index, AT_SYSINFO);
-
-    index = stack_write(local_stack_top, index, PROCESS_IPC_BUFFER);
-    index = stack_write(local_stack_top, index, AT_SEL4_IPC_BUFFER_PTR);
-
-    /* null terminate the environment pointers */
-    index = stack_write(local_stack_top, index, 0);
-
-    /* we don't have any env pointers - skip */
-
-    /* null terminate the argument pointers */
-    index = stack_write(local_stack_top, index, 0);
-
-    /* no argpointers - skip */
-
-    /* set argc to 0 */
-    stack_write(local_stack_top, index, 0);
-
-    /* adjust the initial stack top */
-    stack_top += (index * sizeof(seL4_Word));
-
-    /* the stack *must* remain aligned to a double word boundary,
-     * as GCC assumes this, and horrible bugs occur if this is wrong */
-    assert(index % 2 == 0);
-    assert(stack_top % (sizeof(seL4_Word) * 2) == 0);
-
-    /* unmap our copy of the stack */
-    err = seL4_ARM_Page_Unmap(local_stack_cptr);
-    assert(err == seL4_NoError);
-
-    /* delete the copy of the stack frame cap */
-    err = cspace_delete(cspace, local_stack_cptr);
-    assert(err == seL4_NoError);
-
-    /* mark the slot as free */
-    cspace_free_slot(cspace, local_stack_cptr);
-
-    /* Exend the stack with extra pages */
-    for (int page = 0; page < INITIAL_PROCESS_EXTRA_STACK_PAGES; page++) {
-        stack_bottom -= PAGE_SIZE_4K;
-        frame_ref_t frame = alloc_frame();
-        if (frame == NULL_FRAME) {
-            ZF_LOGE("Couldn't allocate additional stack frame");
-            return 0;
-        }
-
-        /* allocate a slot to duplicate the stack frame cap so we can map it into the application */
-        seL4_CPtr frame_cptr = cspace_alloc_slot(cspace);
-        if (local_stack_cptr == seL4_CapNull) {
-            free_frame(frame);
-            ZF_LOGE("Failed to alloc slot for stack extra stack frame");
-            return 0;
-        }
-
-        /* copy the stack frame cap into the slot */
-        err = cspace_copy(cspace, frame_cptr, cspace, frame_page(frame), seL4_AllRights);
-        if (err != seL4_NoError) {
-            cspace_free_slot(cspace, frame_cptr);
-            free_frame(frame);
-            ZF_LOGE("Failed to copy cap");
-            return 0;
-        }
-
-        err = map_frame(cspace, frame_cptr, tty_test_process.vspace, stack_bottom,
-                        seL4_AllRights, seL4_ARM_Default_VMAttributes);
-        if (err != 0) {
-            cspace_delete(cspace, frame_cptr);
-            cspace_free_slot(cspace, frame_cptr);
-            free_frame(frame);
-            ZF_LOGE("Unable to map extra stack frame for user app");
-            return 0;
-        }
-    }
-
-    return stack_top;
-}
-
-/* Start the first process, and return true if successful
- *
- * This function will leak memory if the process does not start successfully.
- * TODO: avoid leaking memory once you implement real processes, otherwise a user
- *       can force your OS to run out of memory by creating lots of failed processes.
- */
-bool start_first_process(char *app_name, seL4_CPtr ep)
-{
-    /* Create a VSpace */
-    tty_test_process.vspace_ut = alloc_retype(&tty_test_process.vspace, seL4_ARM_PageGlobalDirectoryObject,
-                                              seL4_PGDBits);
-    if (tty_test_process.vspace_ut == NULL) {
-        return false;
-    }
-
-    /* assign the vspace to an asid pool */
-    seL4_Word err = seL4_ARM_ASIDPool_Assign(seL4_CapInitThreadASIDPool, tty_test_process.vspace);
-    if (err != seL4_NoError) {
-        ZF_LOGE("Failed to assign asid pool");
-        return false;
-    }
-
-    /* Create a simple 1 level CSpace */
-    err = cspace_create_one_level(&cspace, &tty_test_process.cspace);
-    if (err != CSPACE_NOERROR) {
-        ZF_LOGE("Failed to create cspace");
-        return false;
-    }
-
-    /* Create an IPC buffer */
-    tty_test_process.ipc_buffer_ut = alloc_retype(&tty_test_process.ipc_buffer, seL4_ARM_SmallPageObject,
-                                                  seL4_PageBits);
-    if (tty_test_process.ipc_buffer_ut == NULL) {
-        ZF_LOGE("Failed to alloc ipc buffer ut");
-        return false;
-    }
-
-    /* allocate a new slot in the target cspace which we will mint a badged endpoint cap into --
-     * the badge is used to identify the process, which will come in handy when you have multiple
-     * processes. */
-    seL4_CPtr user_ep = cspace_alloc_slot(&tty_test_process.cspace);
-    if (user_ep == seL4_CapNull) {
-        ZF_LOGE("Failed to alloc user ep slot");
-        return false;
-    }
-
-    /* now mutate the cap, thereby setting the badge */
-    err = cspace_mint(&tty_test_process.cspace, user_ep, &cspace, ep, seL4_AllRights, TTY_EP_BADGE);
-    if (err) {
-        ZF_LOGE("Failed to mint user ep");
-        return false;
-    }
-
-    /* Create a new TCB object */
-    tty_test_process.tcb_ut = alloc_retype(&tty_test_process.tcb, seL4_TCBObject, seL4_TCBBits);
-    if (tty_test_process.tcb_ut == NULL) {
-        ZF_LOGE("Failed to alloc tcb ut");
-        return false;
-    }
-
-    /* Configure the TCB */
-    err = seL4_TCB_Configure(tty_test_process.tcb,
-                             tty_test_process.cspace.root_cnode, seL4_NilData,
-                             tty_test_process.vspace, seL4_NilData, PROCESS_IPC_BUFFER,
-                             tty_test_process.ipc_buffer);
-    if (err != seL4_NoError) {
-        ZF_LOGE("Unable to configure new TCB");
-        return false;
-    }
-
-    /* Create scheduling context */
-    tty_test_process.sched_context_ut = alloc_retype(&tty_test_process.sched_context, seL4_SchedContextObject,
-                                                     seL4_MinSchedContextBits);
-    if (tty_test_process.sched_context_ut == NULL) {
-        ZF_LOGE("Failed to alloc sched context ut");
-        return false;
-    }
-
-    /* Configure the scheduling context to use the first core with budget equal to period */
-    err = seL4_SchedControl_Configure(sched_ctrl_start, tty_test_process.sched_context, US_IN_MS, US_IN_MS, 0, 0);
-    if (err != seL4_NoError) {
-        ZF_LOGE("Unable to configure scheduling context");
-        return false;
-    }
-
-    /* bind sched context, set fault endpoint and priority
-     * In MCS, fault end point needed here should be in current thread's cspace.
-     * NOTE this will use the unbadged ep unlike above, you might want to mint it with a badge
-     * so you can identify which thread faulted in your fault handler */
-    err = seL4_TCB_SetSchedParams(tty_test_process.tcb, seL4_CapInitThreadTCB, seL4_MinPrio, TTY_PRIORITY,
-                                  tty_test_process.sched_context, ep);
-    if (err != seL4_NoError) {
-        ZF_LOGE("Unable to set scheduling params");
-        return false;
-    }
-
-    /* Provide a name for the thread -- Helpful for debugging */
-    NAME_THREAD(tty_test_process.tcb, app_name);
-
-    /* parse the cpio image */
-    ZF_LOGI("\nStarting \"%s\"...\n", app_name);
-    elf_t elf_file = {};
-    unsigned long elf_size;
-    size_t cpio_len = _cpio_archive_end - _cpio_archive;
-    char *elf_base = cpio_get_file(_cpio_archive, cpio_len, app_name, &elf_size);
-    if (elf_base == NULL) {
-        ZF_LOGE("Unable to locate cpio header for %s", app_name);
-        return false;
-    }
-    /* Ensure that the file is an elf file. */
-    if (elf_newFile(elf_base, elf_size, &elf_file)) {
-        ZF_LOGE("Invalid elf file");
-        return -1;
-    }
-
-    /* set up the stack */
-    seL4_Word sp = init_process_stack(&cspace, seL4_CapInitThreadVSpace, &elf_file);
-
-    /* load the elf image from the cpio file */
-    err = elf_load(&cspace, tty_test_process.vspace, &elf_file);
-    if (err) {
-        ZF_LOGE("Failed to load elf image");
-        return false;
-    }
-
-    /* Map in the IPC buffer for the thread */
-    err = map_frame(&cspace, tty_test_process.ipc_buffer, tty_test_process.vspace, PROCESS_IPC_BUFFER,
-                    seL4_AllRights, seL4_ARM_Default_VMAttributes);
-    if (err != 0) {
-        ZF_LOGE("Unable to map IPC buffer for user app");
-        return false;
-    }
-
-    /* Start the new process */
-    seL4_UserContext context = {
-        .pc = elf_getEntryPoint(&elf_file),
-        .sp = sp,
-    };
-    printf("Starting ttytest at %p\n", (void *) context.pc);
-    err = seL4_TCB_WriteRegisters(tty_test_process.tcb, 1, 0, 2, &context);
-    ZF_LOGE_IF(err, "Failed to write registers");
-    return err == seL4_NoError;
+    assert_main_thread();
+    ZF_LOGF_IF(REPLY_OBJ_FULL, "Reply object array is full on REPLY_RET");
+    replyobjs.data[replyobjs.prodpos] = reply;
+    replyobjs.prodpos = REPLY_POS_INC(replyobjs.prodpos);
 }
 
 /* Allocate an endpoint and a notification object for sos.
@@ -527,8 +449,23 @@ void init_muslc(void)
     muslcsys_install_syscall(__NR_madvise, sys_madvise);
 }
 
+void scratchas_init(void)
+{
+    // preallocate scratchas
+    dynarray_init(&scratchas, sizeof(addrspace_t));
+    ZF_LOGF_IF(!dynarray_resize(&scratchas, 8), "Cannot allocate array for scratch address space.");
+}
+
+void start_first_process(void* param)
+{
+    seL4_Word pid = (proctable_t*)param - proctable;
+    if(!start_process_load_elf(pid)) 
+        ZF_LOGF("Failed to start initial process.");
+}
+
 NORETURN void *main_continued(UNUSED void *arg)
 {
+    main_ipc_buff = seL4_GetIPCBuffer();
     /* Initialise other system compenents here */
     seL4_CPtr ipc_ep, ntfn;
     sos_ipc_init(&ipc_ep, &ntfn);
@@ -541,6 +478,23 @@ NORETURN void *main_continued(UNUSED void *arg)
     );
     frame_table_init(&cspace, seL4_CapInitThreadVSpace);
 
+    // fill in SOS' own process data!
+    set_pid_state(0, true);
+    proctable[0].vspace = seL4_CapInitThreadVSpace;
+    strncpy(proctable[0].command, "<SOS system>", N_NAME);
+
+    // GRP01: init OS parts here
+    delegate_init(&cspace, ipc_ep);
+    scratchas_init();
+    fileman_init(&cspace, ipc_ep);
+    init_threads(ipc_ep, sched_ctrl_start, sched_ctrl_end);
+    init_process_starter(ipc_ep, sched_ctrl_start, sched_ctrl_end);
+    proc_syscall_init(&cspace, ipc_ep);
+    bgworker_init();
+    start_fake_timer();
+    grp01_map_bookkeep_init();
+    grp01_map_init(0, seL4_CapInitThreadVSpace);
+
     /* run sos initialisation tests */
     run_tests(&cspace);
 
@@ -549,9 +503,14 @@ NORETURN void *main_continued(UNUSED void *arg)
      * so touching the watchdog timers here is not recommended!) */
     void *timer_vaddr = sos_map_device(&cspace, PAGE_ALIGN_4K(TIMER_MAP_BASE), PAGE_SIZE_4K);
 
-    /* Initialise the network hardware. */
+    // init separate thread for malloc
+    malloc_ts_init();
+
+    /* Initialise the network hardware. (meson ethernet for now) */
+    #ifdef CONFIG_PLAT_ODROIDC2
     printf("Network init\n");
     network_init(&cspace, timer_vaddr, ntfn);
+    #endif
 
     /* Initialises the timer */
     printf("Timer init\n");
@@ -559,13 +518,33 @@ NORETURN void *main_continued(UNUSED void *arg)
     /* You will need to register an IRQ handler for the timer here.
      * See "irq.h". */
 
+    // init file systems
+    console_fs_init();
+    cpio_fs_init();
+
+    #if CONFIG_SOS_FAKE_PF > 0ul
+    fake_fs_init(CONFIG_SOS_FAKE_PF_SIZE);
+    #endif
+
+    #if CONFIG_SOS_LOCAL_FS > 0ul
+    #else
+    grp01_nfs_init();
+    #endif
+    
+    frame_table_init_page_file();
+
+    // TBH this is here just for the sake of loading ELF/1st process!
+    ZF_LOGF_IF(!bgworker_create(0), "Cannot create SOS background worker");
+
     /* Start the user application */
     printf("Start first process\n");
-    bool success = start_first_process(TTY_NAME, ipc_ep);
-    ZF_LOGF_IF(!success, "Failed to start first process");
+
+    int first_pid = create_process(0, FIRST_PROC_NAME);
+    ZF_LOGF_IF(first_pid <= 0, "Failed to bootstrap initial process.");
+    bgworker_enqueue_callback(0, start_first_process, proctable + first_pid);
 
     printf("\nSOS entering syscall loop\n");
-    init_threads(ipc_ep, sched_ctrl_start, sched_ctrl_end);
+
     syscall_loop(ipc_ep);
 }
 /*
@@ -598,8 +577,11 @@ int main(void)
      * goes via the kernel)
      *
      * NOTE we share this uart with the kernel when the kernel is in debug mode. */
+    // meson UART only
+    #ifdef CONFIG_PLAT_ODROIDC2
     uart_init(&cspace);
     update_vputchar(uart_putchar);
+    #endif
 
     /* test print */
     printf("SOS Started!\n");

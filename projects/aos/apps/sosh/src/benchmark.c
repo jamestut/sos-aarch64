@@ -147,8 +147,10 @@ static int run_benchmark(char *name, benchmark_fn_t fn, uint32_t overhead,
     /* iterate through buffer sizes, going up by 3 powers of 2 each time,
      * for the provided constants, this will iterate through
      * 512b, 4k, 32k, 256k */
+    printf("Running benchmark: %s\n", name);
     for (size_t sz = BIT(MIN_BUF_SIZE); sz <= BIT(MAX_BUF_SIZE); sz = sz << 3u) {
         uint32_t start, end;
+        printf("Benchmark size: %llu\n", sz);
 
         for (int i = 0; i < N_RESULTS; i++) {
             reset_ccnt(pmcr);

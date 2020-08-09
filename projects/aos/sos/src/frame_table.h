@@ -13,6 +13,8 @@
 
 #include "bootstrap.h"
 #include "ut.h"
+#include "grp01.h"
+#include "fileman.h"
 
 #include <stdlib.h>
 #include <stdbool.h>
@@ -51,21 +53,50 @@ extern char *frame_table_list_names[];
 /* Debugging macro to get the human-readable name of a particular list ID. */
 #define LIST_ID_NAME(list_id) (frame_table_list_names[list_id])
 
+// to save memory associated with the frame data bookkeeping, we decided
+// to limit the maximum amount of file that can be faulted.
+#define FILE_OFFSET_BITS 16
+#define FILE_BACKER_PTR_BITS 40
+#define MAX_FILE_BACK_SIZE (BIT(FILE_OFFSET_BITS) * PAGE_SIZE_4K)
+
 /* The actual representation of a frame in the frame table. */
+#define MAX_FRAME_USAGE 1
 typedef struct frame frame_t;
 PACKED struct frame {
-    /* Page used to map frame into SOS memory. */
-    seL4_ARM_Page sos_page: 20;
+    // Index to the backing storage
+    // If "paged" is true, backing = file, else backing = memory frame
+    size_t back_idx: FRAME_TABLE_BITS;
     /* Index in frame table of previous element in list. */
-    frame_ref_t prev : 19;
+    frame_ref_t prev : FRAME_TABLE_BITS;
     /* Index in frame table of next element in list. */
-    frame_ref_t next : 19;
+    frame_ref_t next : FRAME_TABLE_BITS;
     /* Indicates which list the frame is in. */
     list_id_t list_id : 2;
-    /* Unused bits */
-    size_t unused : 4;
+    // Indicates if this frame is pinned 
+    bool pinned : 1;
+    // Indicates if frame is paged
+    bool paged : 1;
+    // Indicates if frame has underlying backing store
+    bool backed : 1;
+    // Indicates if, on fault, requires zeroing out the new frame
+    bool reqempty : 1;
+    // usage count, for "second chance" algorithm
+    size_t usage : 1;
+    // Indicates if this frame is backed by a file instead of a regular frame
+    // Only read-only operations are supported if this flag is on.
+    // Any write operation will be discarded upon frame free/page out.
+    bool file_backed : 1;
+
+    // file data. note that we have some limitation as we want to keep the
+    // frame structure usage down.
+    // If file_backed, indicates page position of this frame in file
+    size_t file_pos : FILE_OFFSET_BITS;
+    // If file_backed, indicates a pointer to struct addrspace_file_back
+    // note that address can't be too high if we want to save space.
+    uintptr_t file_backer : FILE_BACKER_PTR_BITS;
 };
-compile_time_assert("Small CPtr size", 20 >= INITIAL_TASK_CSPACE_BITS);
+// our preferred target size
+compile_time_assert(struct frame size, sizeof(frame_t) == (sizeof(size_t) * 2));
 
 /*
  * Initialise frame table.
@@ -74,6 +105,9 @@ compile_time_assert("Small CPtr size", 20 >= INITIAL_TASK_CSPACE_BITS);
  * @param vspace  virtual address space of SOS.
  */
 void frame_table_init(cspace_t *cspace, seL4_CPtr vspace);
+
+// open the page file
+void frame_table_init_page_file();
 
 /*
  * Get the cspace used by the frame table.
@@ -105,8 +139,12 @@ cspace_t *frame_table_cspace(void);
  */
 frame_ref_t alloc_frame(void);
 
+// like alloc_frame, but guaranteed to be zero initialized.
+frame_ref_t alloc_empty_frame(void);
+
 /*
- * Free a frame allocated by the frame table.
+ * Free a frame allocated by the frame table, and invalidates all derived
+ * frames.
  *
  * This returns the frame to the frame table for re-use rather than
  * returning it to the untyped allocator.
@@ -141,7 +179,7 @@ void invalidate_frame(frame_ref_t frame_ref);
 
 /*
  * Get the capability to the page used to map the frame into SOS.
- *
+ * 
  * This can be copied to create mappings into additional virtual address
  * spaces.
  */
@@ -153,3 +191,11 @@ seL4_ARM_Page frame_page(frame_ref_t frame_ref);
  * This should only be used for debugging.
  */
 frame_t *frame_from_ref(frame_ref_t frame_ref);
+
+// pin/unpin the frame.
+// returns the previous pinning status.
+bool frame_set_pin(frame_ref_t frame_ref, bool pin);
+
+bool page_out_frame(frame_ref_t frame_ref);
+
+void frame_set_file_backing(frame_ref_t frame_ref, sos_filehandle_t* backer, size_t page_offset);

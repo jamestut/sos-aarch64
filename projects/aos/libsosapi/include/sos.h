@@ -129,6 +129,13 @@ void sos_sys_usleep(int msec);
 /* Sleeps for the specified number of milliseconds.
  */
 
+size_t sos_grow_stack(ssize_t pages);
+// Grow the stack by the specified pages. Returns the size of stack in pages.
+// Once stack grows, it can't be shrunk.
+
+ssize_t sos_brk(uintptr_t target);
+// return the pointer to brk limit, or negative value if error.
+// created because musl's user's brk implementation is broken on SOS.
 
 /*************************************************************************/
 /*                                   */
@@ -148,3 +155,12 @@ int sos_share_vm(void *adr, size_t size, int writable);
  *
  * Returns 0 if successful, -1 otherwise (invalid address or size).
  */
+
+//GRP01's addon
+extern int sos_errno;
+
+int sos_sys_opendir(const char* path);
+
+int sos_sys_getdirent_f(int fh, int pos, char *name, size_t nbyte);
+
+void* sos_large_ipc_buffer(void);

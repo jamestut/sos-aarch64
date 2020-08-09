@@ -327,7 +327,7 @@ static void trim(struct chunk *self, size_t n)
 	free(CHUNK_TO_MEM(split));
 }
 
-void *malloc(size_t n)
+void *__malloc_full(size_t n)
 {
 	struct chunk *c;
 	int i, j;
@@ -376,7 +376,7 @@ void *malloc(size_t n)
 	return CHUNK_TO_MEM(c);
 }
 
-void *__malloc0(size_t n)
+void *__malloc0_full(size_t n)
 {
 	void *p = malloc(n);
 	if (p && !IS_MMAPPED(MEM_TO_CHUNK(p))) {
@@ -387,7 +387,7 @@ void *__malloc0(size_t n)
 	return p;
 }
 
-void *realloc(void *p, size_t n)
+void *__realloc_full(void *p, size_t n)
 {
 	struct chunk *self, *next;
 	size_t n0, n1;
@@ -457,7 +457,7 @@ void *realloc(void *p, size_t n)
 	return new;
 }
 
-void free(void *p)
+void __free_full(void *p)
 {
 	struct chunk *self = MEM_TO_CHUNK(p);
 	struct chunk *next;
@@ -539,3 +539,8 @@ void free(void *p)
 
 	unlock_bin(i);
 }
+
+weak_alias(__malloc_full, malloc);
+weak_alias(__malloc0_full, __malloc0);
+weak_alias(__realloc_full, realloc);
+weak_alias(__free_full, free);

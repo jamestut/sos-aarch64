@@ -1,0 +1,22 @@
+#pragma once
+
+#define SOS_SYSCALL_UNIMPLEMENTED 0x7FFFFFFF
+
+#define SOS_SYSCALL_READ          0
+#define SOS_SYSCALL_WRITE         1
+#define SOS_SYSCALL_OPEN          2
+#define SOS_SYSCALL_CLOSE         3
+#define SOS_SYSCALL_STAT          4
+#define SOS_SYSCALL_MMAP          9
+#define SOS_SYSCALL_MUNMAP       11
+#define SOS_SYSCALL_BRK          12
+#define SOS_SYSCALL_USLEEP       35
+#define SOS_SYSCALL_MY_ID        39
+#define SOS_SYSCALL_PROC_NEW     57
+#define SOS_SYSCALL_PROC_DEL     62
+#define SOS_SYSCALL_WAITPID     247
+#define SOS_SYSCALL_TIMESTAMP   201
+#define SOS_SYSCALL_LIST_PROC   391
+#define SOS_SYSCALL_GROW_STACK 1001
+#define SOS_SYSCALL_OPENDIR    1781
+#define SOS_SYSCALL_DIRREAD    1782

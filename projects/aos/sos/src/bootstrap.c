@@ -26,6 +26,12 @@
 #include "dma.h"
 #include "vmem_layout.h"
 
+#ifndef CONFIG_PLAT_ODROIDC2
+// we use this constant to prevent SOS crashing because of the invalid
+// bootinfo given if the target platform was not odroid c2
+#define MAX_N_CNODES 8192
+#endif
+
 /* extra cspace info for the initial bootstrapped cspace */
 typedef struct {
     /* track the next free vaddr we have for mapping in frames
@@ -218,6 +224,16 @@ void sos_bootstrap(cspace_t *cspace, const seL4_BootInfo *bi)
 
     /* now work out how many 2nd level nodes are required - with a buffer */
     size_t n_cnodes = n_slots / CNODE_SLOTS(CNODE_SIZE_BITS) + 2;
+
+    /* truncate if larger than 32 bit (for platforms other than odroid, stemming from invalid BI) */
+    #ifndef CONFIG_PLAT_ODROIDC2
+    if(n_cnodes > MAX_N_CNODES) { 
+        ZF_LOGW("Number of 2nd level node truncated to %d from %d", MAX_N_CNODES, n_cnodes);
+        n_cnodes = MAX_N_CNODES;
+        n_slots = MAX_N_CNODES * CNODE_SLOTS(CNODE_SIZE_BITS) + 2; 
+    }
+    #endif
+
     ZF_LOGD("%zu slots needed, %zu cnodes", n_slots, n_cnodes);
     size += (n_cnodes * BIT(CNODE_SIZE_BITS)) + BIT(INITIAL_TASK_CNODE_SIZE_BITS);
 

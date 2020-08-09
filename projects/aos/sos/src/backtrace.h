@@ -14,6 +14,8 @@
 #include <stdio.h>
 #include "sys/execinfo.h"
 
+#define MAX_BACKTRACE_DEPTH 20
+
 static inline void print_backtrace(void)
 {
     void *array[10] = {NULL};
@@ -26,4 +28,22 @@ static inline void print_backtrace(void)
             printf("%p\n", array[i]);
         }
     }
+}
+
+// more reliable backtracing!
+static inline void print_backtrace_2(void)
+{
+    puts("Backtracing stack PCs:");
+    void *pcs[MAX_BACKTRACE_DEPTH] = {NULL};
+    for(int pcctr = 1; pcctr <= MAX_BACKTRACE_DEPTH; ++pcctr) {
+        if(backtrace(pcs, pcctr)) {
+            if(pcs[pcctr-1]) 
+                printf("%p\n", pcs[pcctr-1]);
+            else 
+                break;
+        } else 
+            break;
+    }
+    // if this ever reached!
+    puts("Backtrace finished.");
 }

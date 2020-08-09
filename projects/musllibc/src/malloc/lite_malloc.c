@@ -46,5 +46,5 @@ static void *__simple_malloc(size_t n)
 	return p;
 }
 
-weak_alias(__simple_malloc, malloc);
-weak_alias(__simple_malloc, __malloc0);
+// weak_alias(__simple_malloc, malloc);
+// weak_alias(__simple_malloc, __malloc0);

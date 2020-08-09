@@ -18,6 +18,7 @@
 #include <errno.h>
 #include <assert.h>
 
+#ifdef MORECORE_ENABLED
 /*
  * Statically allocated morecore area.
  *
@@ -76,3 +77,4 @@ long sys_mmap(va_list ap)
     ZF_LOGF("not implemented");
     return -ENOMEM;
 }
+#endif
