@@ -1,0 +1,2 @@
+WARNING:root:Only mapping 4096/8192 bytes from node /soc/interrupt-controller@c4301000, region 1. Set kernel_size in YAML to silence.
+WARNING:root:Only mapping 4096/8192 bytes from node /soc/interrupt-controller@c4301000, region 2. Set kernel_size in YAML to silence.
