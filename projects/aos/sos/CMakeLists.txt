@@ -23,7 +23,7 @@ config_string(SosUseFakePageFile SOS_FAKE_PF "Use fake page file" UNQUOTE DEFAUL
 
 config_string(SosFakePageFileSize SOS_FAKE_PF_SIZE "Capacity of fake page file in bytes" UNQUOTE DEFAULT "10485760ul")
 
-config_string(SosMaxPageFileSize SOS_PF_SIZE "Capacity of real page file in bytes" UNQUOTE DEFAULT "0ul")
+config_string(SosPageFileName SOS_PF_NAME "The name of the page file in NFS" DEFAULT "pf")
 
 config_string(SosUseLocalFS SOS_LOCAL_FS "Use local FS on CPIO instead of NFS" UNQUOTE DEFAULT "0ul")
 
